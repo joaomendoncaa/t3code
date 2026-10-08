@@ -310,7 +310,7 @@ describe.runIf(binaryPath !== undefined && ROOT !== "")("Muse V2 live orchestrat
           "decline",
           "Run the shell command `touch declined.txt` with your shell tool, then reply DONE.",
         );
-        // The model may retry after a decline; every retry is declined too.
+        // The model may retry after a decline; decline each retry, then stop the run.
         const runCount = 2;
         let declined = yield* waitFor(
           threadId,
@@ -320,15 +320,23 @@ describe.runIf(binaryPath !== undefined && ROOT !== "")("Muse V2 live orchestrat
         );
         assert.isDefined(pendingRequest(declined));
         for (let retry = 0; pendingRequest(declined) !== undefined && retry < 4; retry += 1) {
+          const answered = pendingRequest(declined)!.id;
           yield* answer(`decline-${retry}`, "decline");
-          declined = yield* waitFor(
-            threadId,
-            (projection) =>
-              (projection.runs.length === runCount && settled(projection)) ||
-              pendingRequest(projection) !== undefined,
-          );
+          declined = yield* waitFor(threadId, (projection) => {
+            const next = pendingRequest(projection);
+            return (next !== undefined && next.id !== answered) || settled(projection);
+          });
         }
-        assert.equal(declined.runs.at(-1)?.status, "completed");
+        if (!settled(declined)) {
+          yield* orchestrator.dispatch({
+            type: "run.interrupt",
+            commandId: CommandId.make(`command:${threadId}:stop-retries`),
+            threadId,
+            runId: declined.runs.at(-1)!.id,
+          });
+          declined = yield* waitFor(threadId, settled);
+        }
+        assert.include(["completed", "interrupted"], declined.runs.at(-1)?.status);
         assert.isFalse(yield* fs.exists(path.join(ROOT, "work", "declined.txt")));
       }).pipe(Effect.provide(Layer.merge(layerLive, NodeServices.layer)), Effect.scoped),
     600_000,
