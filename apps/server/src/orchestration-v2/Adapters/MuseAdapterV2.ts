@@ -1,5 +1,6 @@
 import { MspError, type SendUserTurnOptions } from "@muse-code/sdk";
 import {
+  MUSE_DEFAULT_MODEL,
   type MuseSettings,
   ProviderDriverKind,
   type ModelSelection,
@@ -51,7 +52,6 @@ import {
   MuseTurnCompleted,
   MuseTurnStartResult,
   MuseUserInput,
-  MuseViewPage,
   museApprovalChoices,
   museApprovalOptions,
   type MuseItem,
@@ -98,16 +98,6 @@ import { museItemStatus, museToolPresentation } from "./MuseItemPresentation.ts"
 const MUSE_PROVIDER = ProviderDriverKind.make("muse");
 const isOpenSessionError = Schema.is(ProviderAdapterOpenSessionError);
 const isProtocolError = Schema.is(ProviderAdapterProtocolError);
-const effectiveModelCatalogSchema = Schema.Struct({
-  providerId: Schema.String,
-  models: Schema.Array(
-    Schema.Struct({
-      modelId: Schema.String,
-      providerId: Schema.String,
-      isActive: Schema.Boolean,
-    }),
-  ),
-});
 
 const MuseProviderCapabilitiesV2 = {
   runtimePolicy: { enforcement: "native" },
@@ -250,6 +240,21 @@ const nativeRef = (nativeId: string) => ({
   strength: "strong" as const,
 });
 const recordSchema = Schema.Record(Schema.String, Schema.Unknown);
+// Notifications that only add detail. A malformed one is skipped instead of ending the session.
+const INFORMATIONAL_NOTIFICATIONS = new Set([
+  "session/contextUsage",
+  "session/tokenUsage",
+  "session/todoListChanged",
+  "turn/retryScheduled",
+]);
+// Tools whose results already show as T3's own todo list and question rows.
+const TOOLS_WITH_NATIVE_ROWS = new Set(["write_todos", "request_user_input"]);
+// `approval/decide` errors meaning the approval was already settled elsewhere.
+const SETTLED_APPROVAL_ERRORS = new Set([
+  "approvalAlreadyResolved",
+  "approvalRequirementStale",
+  "approvalNotFound",
+]);
 const responseAnswerSchema = Schema.Union([Schema.String, Schema.Array(Schema.String)]);
 
 /** One scoped Muse host owns one native session; the orchestrator owns app runs and queuing. */
@@ -273,7 +278,12 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       if (input.runtimePolicy.interactionMode === "plan")
         return yield* protocolError("Muse Code does not support dedicated Plan mode");
       const scope = yield* Effect.scope;
-      const cwd = input.runtimePolicy.cwd ?? options.serverConfig.cwd;
+      // Muse rejects non-canonical workspace roots (for example macOS /tmp) and
+      // reports canonical paths in approvals, so resolve symlinks once here.
+      const requestedCwd = input.runtimePolicy.cwd ?? options.serverConfig.cwd;
+      const cwd = yield* options.fileSystem
+        .realPath(requestedCwd)
+        .pipe(Effect.orElseSucceed(() => requestedCwd));
       const now = yield* DateTime.now;
       let session: OrchestrationV2ProviderSession = {
         id: input.providerSessionId,
@@ -305,13 +315,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       let nativeSessionId: string | undefined;
       let thread: OrchestrationV2ProviderThread | undefined;
       let active: ActiveTurn | undefined;
-      let recovery: { nativeId: string; done: Deferred.Deferred<void> } | undefined;
+      // The last finished turn, so context usage reported after it still lands on it.
+      let lastProviderTurn: OrchestrationV2ProviderTurn | undefined;
       const pending = new Map<RuntimeRequestId, PendingRequest>();
-      const providerTurns = new Map<string, OrchestrationV2ProviderTurn>();
-      const messages = new Map<string, OrchestrationV2ConversationMessage>();
-      const history = new Map<string, MuseItem>();
       const seenTerminals = new Set<string>();
-      const historyTerminals = new Map<string, typeof MuseTurnCompleted.Type>();
       const observedChildren = new Map<string, ActiveTurn>();
       const emit = (event: ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
@@ -340,15 +347,22 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                   ...(nativeSessionId ? { sessionId: nativeSessionId } : {}),
                   ...params,
                 }),
-          catch: (cause) => protocolError(`Muse ${method} failed`, cause),
+          catch: (cause) =>
+            protocolError(
+              cause instanceof Error && cause.message
+                ? `Muse ${method} failed: ${cause.message}`
+                : `Muse ${method} failed`,
+              cause,
+            ),
         }).pipe(
           Effect.timeout(options.requestTimeoutMs ?? 30_000),
-          Effect.catchTag("TimeoutError", (cause) =>
-            Effect.gen(function* () {
-              yield* eventPermit.withPermits(1)(failHost(cause));
-              return yield* protocolError(`Muse ${method} timed out; its host was closed`, cause);
-            }),
-          ),
+          Effect.catchTags({
+            TimeoutError: (cause) =>
+              Effect.gen(function* () {
+                yield* eventPermit.withPermits(1)(failHost(cause));
+                return yield* protocolError(`Muse ${method} timed out; its host was closed`, cause);
+              }),
+          }),
         );
       const updateSession = Effect.fnUntraced(function* (
         status: OrchestrationV2ProviderSession["status"],
@@ -404,6 +418,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         terminal?: OrchestrationV2TurnItem["status"],
       ) {
         if (item.kind === "userMessage") return;
+        if (item.kind === "toolCall" && item.tool && TOOLS_WITH_NATIVE_ROWS.has(item.tool)) return;
         const time = yield* DateTime.now;
         const status = terminal ?? museItemStatus(item);
         if (item.kind === "subagent") {
@@ -438,7 +453,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             createdAt: base.startedAt,
             updatedAt: time,
           };
-          messages.set(messageId, message);
           yield* emit({ type: "message.updated", driver: MUSE_PROVIDER, message });
           turnItem = { ...base, type: "assistant_message", messageId, text, streaming };
         } else if (item.kind === "reasoning") {
@@ -544,7 +558,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         turn.dirty.clear();
         for (const entry of pending.values()) yield* resolvePending(entry, "cancelled");
         turn.providerTurn = { ...turn.providerTurn, status, completedAt };
-        providerTurns.set(turn.nativeId, turn.providerTurn);
+        lastProviderTurn = turn.providerTurn;
         yield* emit({
           type: "provider_turn.updated",
           driver: MUSE_PROVIDER,
@@ -612,7 +626,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           : failure instanceof Error
             ? failure.message
             : "Muse transport failed.";
-        yield* Effect.tryPromise(() => host.close()).pipe(Effect.ignore);
         if (active) yield* finish(active, "failed", detail, "broken");
         else {
           yield* updateThread({ status: "error" });
@@ -620,6 +633,9 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         }
         yield* settleObservedChildren("failed");
         yield* Queue.fail(events, protocolError(detail, cause));
+        // Report the failure first; a hung host can take a while to close.
+        const failed = host;
+        yield* Effect.tryPromise(() => failed.close()).pipe(Effect.ignore, Effect.forkIn(scope));
       });
       const publishRequest = Effect.fnUntraced(function* (native: PendingRequest["native"]) {
         const turn = active;
@@ -669,7 +685,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 choiceId: accept.choiceId,
               }).pipe(
                 Effect.catch((cause) =>
-                  Queue.offer(inbox, { type: "failure", cause, epoch: hostEpoch }),
+                  cause.payload instanceof MspError &&
+                  SETTLED_APPROVAL_ERRORS.has(cause.payload.kind)
+                    ? Effect.void
+                    : Queue.offer(inbox, { type: "failure", cause, epoch: hostEpoch }),
                 ),
                 Effect.forkIn(scope),
               );
@@ -690,12 +709,14 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             ));
         const time = yield* DateTime.now;
         const nodeId = idAllocator.derive.approvalNode({ requestId });
-        const kind =
-          native.type === "question"
-            ? "user_input"
-            : native.value.subject.kind === "shell"
-              ? "command"
-              : native.value.subject.access === "read"
+        const subject = native.type === "approval" ? native.value.subject : undefined;
+        const kind = !subject
+          ? "user_input"
+          : subject.kind === "shell"
+            ? "command"
+            : subject.kind !== "fileAccess"
+              ? "permission"
+              : subject.access === "read"
                 ? "file-read"
                 : "file-change";
         const runtimeRequest: OrchestrationV2RuntimeRequest = {
@@ -744,6 +765,8 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 prompt:
                   native.value.subject.command ??
                   native.value.subject.path ??
+                  native.value.subject.host ??
+                  native.value.subject.target ??
                   native.value.toolName ??
                   "Muse requests permission",
                 options: museApprovalOptions(native.value),
@@ -779,19 +802,11 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       const handleNotification = Effect.fnUntraced(function* (method: string, data: unknown) {
         const params = yield* decode(recordSchema, data);
         if (params.sessionId !== nativeSessionId) return;
-        if (method === "turn/completed") {
-          const terminal = yield* decode(MuseTurnCompleted, params);
-          historyTerminals.set(terminal.turnId, terminal);
-          if (recovery && recovery.nativeId === terminal.turnId) {
-            yield* Deferred.succeed(recovery.done, undefined);
-            return;
-          }
-        }
         if (method === "view/gap")
           return yield* protocolError("Muse delivery gap requires session recovery");
         if (method === "session/contextUsage") {
           const usage = yield* decode(MuseContextUsage, params);
-          const currentTurn = active?.providerTurn ?? [...providerTurns.values()].at(-1);
+          const currentTurn = active?.providerTurn ?? lastProviderTurn;
           const updatedAt = DateTime.formatIso(yield* DateTime.now);
           const tokenUsage = {
             ...currentTurn?.tokenUsage,
@@ -803,8 +818,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           if (currentTurn) {
             const updated = { ...currentTurn, tokenUsage };
             if (active) active.providerTurn = updated;
-            else if (updated.nativeTurnRef?.nativeId)
-              providerTurns.set(updated.nativeTurnRef.nativeId, updated);
+            else lastProviderTurn = updated;
             yield* emit({
               type: "provider_turn.updated",
               driver: MUSE_PROVIDER,
@@ -813,23 +827,29 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           }
           return;
         }
-        if (["item/started", "item/updated", "item/completed"].includes(method)) {
-          const { item } = yield* decode(MuseItemEvent, params);
-          const owner = observedChildren.get(item.itemId);
-          if (owner && owner !== active && item.turnId === owner.nativeId) {
-            const previous = owner.items.get(item.itemId);
-            if (!previous || item.revision > previous.revision) {
-              owner.items.set(item.itemId, item);
-              history.set(item.itemId, item);
-              yield* publishItem(owner, item);
+        const itemEvent = ["item/started", "item/updated", "item/completed"].includes(method)
+          ? (yield* decode(MuseItemEvent, params)).item
+          : undefined;
+        if (itemEvent) {
+          const owner = observedChildren.get(itemEvent.itemId);
+          if (owner && owner !== active && itemEvent.turnId === owner.nativeId) {
+            const previous = owner.items.get(itemEvent.itemId);
+            if (!previous || itemEvent.revision > previous.revision) {
+              owner.items.set(itemEvent.itemId, itemEvent);
+              yield* publishItem(owner, itemEvent);
             }
             return;
           }
         }
         const turn = active;
         if (!turn) {
-          if (method === "turn/started")
-            return yield* protocolError("Muse started a turn without an owning T3 run");
+          // Muse can start turns on its own (for example goal follow-ups). T3 has no
+          // run to show them in, so stop them instead of letting them work unseen.
+          if (method === "turn/started" && typeof params.turnId === "string")
+            yield* request("turn/interrupt", { turnId: params.turnId }).pipe(
+              Effect.ignore,
+              Effect.forkIn(scope),
+            );
           return;
         }
         if (typeof params.turnId === "string" && params.turnId !== turn.nativeId && !turn.compact)
@@ -838,7 +858,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           case "item/started":
           case "item/updated":
           case "item/completed": {
-            const { item } = yield* decode(MuseItemEvent, params);
+            const item = itemEvent!;
             if (
               item.turnId &&
               item.turnId !== turn.nativeId &&
@@ -848,7 +868,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             const previous = turn.items.get(item.itemId);
             if (previous && previous.revision >= item.revision) return;
             turn.items.set(item.itemId, item);
-            history.set(item.itemId, item);
             turn.dirty.delete(item.itemId);
             yield* publishItem(turn, item);
             if (turn.compact && item.kind === "compaction" && item.status !== "inProgress") {
@@ -881,6 +900,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 item = { ...previous, summary };
               }
             }
+            if (item === previous) return;
             turn.items.set(item.itemId, item);
             turn.dirty.add(item.itemId);
             if (!turn.flushScheduled) {
@@ -1122,7 +1142,13 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                     { provider: "muse", method: entry.method, params: entry.params },
                     input.threadId,
                   );
-                yield* handleNotification(entry.method, entry.params).pipe(Effect.catch(failHost));
+                yield* handleNotification(entry.method, entry.params).pipe(
+                  Effect.catch((cause) =>
+                    INFORMATIONAL_NOTIFICATIONS.has(entry.method)
+                      ? Effect.logWarning(`Skipped an unreadable Muse ${entry.method}`, cause)
+                      : failHost(cause),
+                  ),
+                );
               }
             }
           }).pipe(eventPermit.withPermits(1)),
@@ -1176,7 +1202,11 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         created.connection.onProtocolError((cause) => {
           Queue.offerUnsafe(inbox, { type: "failure", cause, epoch });
         });
+        // These are presentation receipts only. The matching notifications drive the UI,
+        // and decisions travel as `approval/decide` and `userInput/answer` commands.
         created.connection.onServerRequest(async (request) => {
+          if (request.method === "approval/request" || request.method === "userInput/request")
+            return {};
           throw new Error(`Unsupported Muse server request: ${request.method}`);
         });
         void created.connection.closed.then(() => {
@@ -1188,12 +1218,19 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             });
         });
         void created.exited.then((exit) => {
-          if (!closed && epoch === hostEpoch)
+          if (!closed && epoch === hostEpoch) {
+            const reason = created
+              .stderrTail?.()
+              .findLast((line) => line.trim())
+              ?.trim();
             Queue.offerUnsafe(inbox, {
               type: "failure",
-              cause: new Error(`Muse host exited (${exit.code ?? exit.signal})`),
+              cause: new Error(
+                `Muse exited unexpectedly (${exit.code ?? exit.signal})${reason ? `: ${reason}` : ""}`,
+              ),
               epoch,
             });
+          }
         });
       });
       yield* Effect.addFinalizer(() =>
@@ -1208,50 +1245,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       );
       yield* launchHost();
 
-      const loadHistory = Effect.fnUntraced(function* (
-        result: typeof MuseSessionResult.Type,
-        readTerminals = false,
-      ) {
-        const items = result.history?.items ?? result.history?.snapshot?.state.items;
-        history.clear();
-        if (items) {
-          for (const item of items) history.set(item.itemId, item);
-          if (!readTerminals) return;
-        }
-        if (!result.history) return;
-        let cursor: string | null = null;
-        const cursors = new Set<string>();
-        do {
-          const page: typeof MuseViewPage.Type = yield* request(
-            "view/page",
-            {
-              sessionId: result.session.sessionId,
-              direction: "forward",
-              limit: 1000,
-              ...(cursor ? { cursor } : {}),
-            },
-            false,
-          ).pipe(Effect.flatMap((value) => decode(MuseViewPage, value)));
-          for (const event of page.events)
-            if (["item/started", "item/updated", "item/completed"].includes(event.method)) {
-              const { item } = yield* decode(MuseItemEvent, event.params);
-              const previous = history.get(item.itemId);
-              if (!previous || previous.revision < item.revision) history.set(item.itemId, item);
-            } else if (event.method === "turn/completed") {
-              const terminal = yield* decode(MuseTurnCompleted, event.params);
-              historyTerminals.set(terminal.turnId, terminal);
-            }
-          cursor = page.nextCursor;
-          if (cursor && cursors.has(cursor))
-            return yield* protocolError("Muse history paging did not advance");
-          if (cursor) cursors.add(cursor);
-        } while (cursor);
-      });
-      const register = Effect.fnUntraced(function* (
-        args: ProviderAdapterV2EnsureThreadInput,
-        fresh = false,
-        expectedForkModel?: string,
-      ) {
+      const register = Effect.fnUntraced(function* (args: ProviderAdapterV2EnsureThreadInput) {
         if (broken || closed)
           return yield* protocolError("Muse host is unavailable; reopen the session");
         if (active)
@@ -1262,11 +1256,9 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           (existing.driver !== MUSE_PROVIDER || existing.providerInstanceId !== options.instanceId)
         )
           return yield* protocolError("Muse thread belongs to another provider instance");
-        const requestedId = fresh
-          ? undefined
-          : existing
-            ? (existing.nativeThreadRef?.nativeId ?? undefined)
-            : input.initialNativeThreadId;
+        const requestedId = existing
+          ? (existing.nativeThreadRef?.nativeId ?? undefined)
+          : input.initialNativeThreadId;
         if (
           thread &&
           (!requestedId || requestedId === nativeSessionId) &&
@@ -1299,11 +1291,15 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           const result = yield* request(
             requestedId ? "session/resume" : "session/start",
             requestedId
-              ? { history: "inline", ...(config ? { config } : {}) }
+              ? // T3 already has the transcript; skip Muse's history payload.
+                { excludeItems: true, ...(config ? { config } : {}) }
               : {
                   workspaceRoot: cwd,
                   ...(config ? { config } : {}),
-                  modelId: args.modelSelection.model,
+                  // The "default" sentinel lets Muse pick the account's default model.
+                  ...(args.modelSelection.model === MUSE_DEFAULT_MODEL
+                    ? {}
+                    : { modelId: args.modelSelection.model }),
                   providerId: "meta",
                   approvalMode: museApprovalMode(args.runtimePolicy.runtimeMode),
                 },
@@ -1319,48 +1315,12 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           );
           if (result.session.sessionId !== nativeSessionId)
             return yield* protocolError("Muse returned a different session identity");
-          yield* loadHistory(result);
-          if (result.session.activeTurnId && !historyTerminals.has(result.session.activeTurnId)) {
-            recovery = {
-              nativeId: result.session.activeTurnId,
-              done: yield* Deferred.make<void>(),
-            };
-            yield* request("turn/interrupt", { turnId: recovery.nativeId });
-            yield* Deferred.await(recovery.done).pipe(
-              Effect.timeout(options.requestTimeoutMs ?? 30_000),
-              Effect.mapError((cause) =>
-                protocolError("Muse recovery interruption did not settle", cause),
-              ),
-            );
-            recovery = undefined;
-          }
           if (requestedId)
             yield* request("session/setApprovalMode", {
               mode: museApprovalMode(args.runtimePolicy.runtimeMode),
             });
-          let effectiveModel = args.modelSelection.model;
-          if (requestedId) {
-            // Saved metadata can name the base model while Contributor remains
-            // effective. Reapplying that metadata can change the native route
-            // and invalidate opaque reasoning history after a fork.
-            const catalog = yield* request("model/list", {}, false).pipe(
-              Effect.flatMap((value) => decode(effectiveModelCatalogSchema, value)),
-            );
-            const selected = catalog.models.filter((model) => model.isActive);
-            if (
-              catalog.providerId !== "meta" ||
-              selected.length !== 1 ||
-              selected[0]!.providerId !== "meta"
-            )
-              return yield* protocolError(
-                "Muse did not identify one effective Meta model for the resumed session",
-              );
-            effectiveModel = selected[0]!.modelId;
-          }
-          if (expectedForkModel && effectiveModel !== expectedForkModel)
-            return yield* protocolError(
-              `Muse's native fork changed the effective model from ${expectedForkModel} to ${effectiveModel}; use a context handoff or a new thread.`,
-            );
+          // A resumed session keeps the model it last ran with; the next turn
+          // switches it when the selection differs.
           const createdAt = yield* DateTime.now;
           thread = existing
             ? {
@@ -1391,7 +1351,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 createdAt,
                 updatedAt: createdAt,
               };
-          session = { ...session, model: effectiveModel };
+          session = {
+            ...session,
+            model: result.session.modelId ?? args.modelSelection.model,
+          };
           yield* emit({
             type: "provider_thread.updated",
             driver: MUSE_PROVIDER,
@@ -1400,9 +1363,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           return thread;
         }).pipe(
           Effect.onError((cause) =>
-            missingNativeSession || fresh || expectedForkModel !== undefined
-              ? Effect.void
-              : eventPermit.withPermits(1)(failHost(cause)),
+            missingNativeSession ? Effect.void : eventPermit.withPermits(1)(failHost(cause)),
           ),
         );
       });
@@ -1444,18 +1405,12 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           return yield* protocolError("Model selection belongs to another Muse instance");
         const catalog = options.modelCatalog ? yield* options.modelCatalog : [];
         const selected = getModelSelectionStringOptionValue(selection, "reasoningEffort");
-        const effort = resolveMuseReasoningEffort(
+        // With no saved choice, the model's own default applies.
+        return resolveMuseReasoningEffort(
           catalog.find((model) => model.slug === selection.model)?.capabilities ??
-            museModelCapabilities(selection.model),
-          selected ?? "max",
+            museModelCapabilities(),
+          selected,
         );
-        // Validate saved effort values before sending them to Muse.
-        if (
-          effort &&
-          !["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)
-        )
-          return yield* protocolError(`Muse SDK does not support '${effort}' reasoning effort`);
-        return effort;
       });
       const start = Effect.fnUntraced(function* (
         turnInput: ProviderAdapterV2TurnInput,
@@ -1473,7 +1428,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           return yield* protocolError("Runtime policy changes require a fresh Muse host");
         const effort = yield* selectionEffort(turnInput.modelSelection);
         const parts = compact ? [] : yield* prompt(turnInput.message);
-        if (session.model !== turnInput.modelSelection.model) {
+        if (
+          turnInput.modelSelection.model !== MUSE_DEFAULT_MODEL &&
+          session.model !== turnInput.modelSelection.model
+        ) {
           yield* request("session/setModel", {
             model: { modelId: turnInput.modelSelection.model, providerId: "meta" },
           });
@@ -1558,6 +1516,9 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                   ...parts,
                 ],
                 displayText: turnInput.message.text || "Image attachment",
+                // A resumed session keeps the root it was created with; pin it to
+                // this thread's current checkout so edits land where T3 tracks them.
+                workspaceRoots: [cwd],
                 ifBusy: "queue",
                 ...(effort ? { reasoningEffort: effort } : {}),
               },
@@ -1572,174 +1533,57 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             }
           }
         }).pipe(
-          Effect.onError((cause) =>
-            eventPermit.withPermits(1)(finish(turn, "failed", Cause.pretty(cause))),
-          ),
+          Effect.onError((cause) => {
+            const error = Cause.squash(cause);
+            const detail = isProtocolError(error)
+              ? error.detail
+              : error instanceof Error
+                ? error.message
+                : "Muse could not start the turn.";
+            return eventPermit.withPermits(1)(finish(turn, "failed", detail));
+          }),
         );
       });
-      const snapshot = Effect.fnUntraced(function* (): Effect.fn.Return<
-        ProviderAdapterV2ThreadSnapshot,
-        ProviderAdapterV2Error
-      > {
-        if (!thread) return yield* protocolError("Muse has no registered thread");
+      // Only messages are read back; T3 owns turn and item history.
+      const snapshot = Effect.fnUntraced(function* (
+        current: OrchestrationV2ProviderThread,
+      ): Effect.fn.Return<ProviderAdapterV2ThreadSnapshot, ProviderAdapterV2Error> {
         const result = yield* request("session/read", { excludeItems: false }, false).pipe(
           Effect.flatMap((value) => decode(MuseSessionResult, value)),
         );
         if (result.session.sessionId !== nativeSessionId)
           return yield* protocolError("Muse snapshot belongs to a different session");
-        yield* loadHistory(result, true);
-        return snapshotFromHistory(thread);
-      });
-      const snapshotFromHistory = (
-        current: OrchestrationV2ProviderThread,
-      ): ProviderAdapterV2ThreadSnapshot => {
-        const turns = new Map<string, OrchestrationV2ProviderTurn>();
-        const snapshotMessages: OrchestrationV2ConversationMessage[] = [];
-        for (const item of history.values()) {
-          const nativeTurnId = item.turnId;
-          if (nativeTurnId && !turns.has(nativeTurnId)) {
-            const known = providerTurns.get(nativeTurnId);
-            turns.set(
-              nativeTurnId,
-              known ?? {
-                id: idAllocator.derive.providerTurn({
-                  driver: MUSE_PROVIDER,
-                  nativeTurnId: `${options.instanceId}:${nativeSessionId}:${nativeTurnId}`,
-                }),
-                providerThreadId: current.id,
-                nodeId: idAllocator.derive.nodeFromProviderItem({
-                  driver: MUSE_PROVIDER,
-                  nativeItemId: `${current.id}:turn:${nativeTurnId}`,
-                }),
-                runAttemptId: null,
-                nativeTurnRef: nativeRef(nativeTurnId),
-                ordinal: turns.size + 1,
-                status:
-                  historyTerminals.get(nativeTurnId)?.terminal === "completed"
-                    ? "completed"
-                    : historyTerminals.get(nativeTurnId)?.terminal === "cancelled"
-                      ? "cancelled"
-                      : historyTerminals.has(nativeTurnId)
-                        ? "failed"
-                        : "pending",
-                startedAt: null,
-                completedAt: null,
-              },
-            );
-          }
-          if (item.kind !== "agentMessage" && item.kind !== "userMessage") continue;
-          const id = idAllocator.derive.messageFromProviderItem({
-            driver: MUSE_PROVIDER,
-            nativeItemId: `${options.instanceId}:${current.id}:${nativeTurnId ?? "history"}:${item.itemId}`,
-          });
-          const existing = messages.get(id);
-          snapshotMessages.push(
-            existing ?? {
-              id,
-              threadId: current.appThreadId ?? input.threadId,
-              runId: null,
-              nodeId: null,
-              role: item.kind === "agentMessage" ? "assistant" : "user",
-              text: item.text ?? "",
-              attachments: [],
-              streaming: item.status === "inProgress",
-              createdBy: item.kind === "agentMessage" ? "agent" : "user",
-              creationSource: "provider",
-              createdAt: current.createdAt,
-              updatedAt: current.updatedAt,
-            },
-          );
-        }
+        const items = result.history?.items ?? result.history?.snapshot?.state.items ?? [];
+        const now = yield* DateTime.now;
         return {
           providerThread: current,
-          providerTurns: [...turns.values()],
-          messages: snapshotMessages,
-          runtimeRequests: [...pending.values()].map((entry) => entry.request),
-          providerPayload: [...history.values()],
-        };
-      };
-      const forkNative = Effect.fnUntraced(function* (
-        source: OrchestrationV2ProviderThread,
-        target?: OrchestrationV2ProviderTurn,
-      ) {
-        if (active || closed || broken)
-          return yield* protocolError("Muse must be idle before forking");
-        if (
-          source.driver !== MUSE_PROVIDER ||
-          source.providerInstanceId !== options.instanceId ||
-          !source.nativeThreadRef
-        )
-          return yield* protocolError(
-            "Muse fork source belongs to another instance or has no native identity",
-          );
-        if (
-          target &&
-          (target.providerThreadId !== source.id ||
-            !target.nativeTurnRef ||
-            target.nativeTurnRef.strength !== "strong" ||
-            target.status !== "completed")
-        )
-          return yield* protocolError("Muse can only fork through a completed native turn");
-        const result = yield* request("session/fork", {
-          sessionId: source.nativeThreadRef.nativeId,
-          ...(target?.nativeTurnRef
-            ? { cutPoint: { lastTurnId: target.nativeTurnRef.nativeId } }
-            : {}),
-          excludeItems: false,
-        }).pipe(Effect.flatMap((value) => decode(MuseSessionResult, value)));
-        if (result.session.sessionId === source.nativeThreadRef.nativeId)
-          return yield* protocolError("Muse fork did not create a distinct session");
-        return result;
-      });
-      const attachFork = Effect.fnUntraced(function* (
-        current: OrchestrationV2ProviderThread,
-        result: typeof MuseSessionResult.Type,
-      ) {
-        const source = thread;
-        const expectedModel = session.model ?? input.modelSelection.model;
-        return yield* Effect.gen(function* () {
-          // Forking may retain source and destination leases. A fresh scoped host
-          // releases both before adopting the durable destination under T3's identity.
-          hostEpoch++;
-          yield* Effect.tryPromise(() => host.close()).pipe(
-            Effect.mapError((cause) => protocolError("Cannot release Muse fork source", cause)),
-          );
-          if (current.id !== thread?.id || current.appThreadId !== thread.appThreadId) {
-            providerTurns.clear();
-            messages.clear();
-            historyTerminals.clear();
-            observedChildren.clear();
-          }
-          yield* launchHost();
-          thread = undefined;
-          nativeSessionId = undefined;
-          return yield* register(
-            {
-              threadId: current.appThreadId ?? input.threadId,
-              modelSelection: {
-                ...input.modelSelection,
-                model: session.model ?? input.modelSelection.model,
-              },
-              runtimePolicy: input.runtimePolicy,
-              existingProviderThread: {
-                ...current,
-                nativeThreadRef: nativeRef(result.session.sessionId),
-              },
-            },
-            false,
-            expectedModel,
-          );
-        }).pipe(
-          Effect.onError((cause) =>
-            eventPermit.withPermits(1)(
-              Effect.gen(function* () {
-                thread ??= source ?? current;
-                yield* updateThread({ status: "error" });
-                yield* failHost(cause);
-              }),
-            ),
+          providerTurns: [],
+          messages: items.flatMap((item): OrchestrationV2ConversationMessage[] =>
+            item.kind === "agentMessage" || item.kind === "userMessage"
+              ? [
+                  {
+                    id: idAllocator.derive.messageFromProviderItem({
+                      driver: MUSE_PROVIDER,
+                      nativeItemId: `${options.instanceId}:${current.id}:${item.turnId ?? "history"}:${item.itemId}`,
+                    }),
+                    threadId: current.appThreadId ?? input.threadId,
+                    runId: null,
+                    nodeId: null,
+                    role: item.kind === "agentMessage" ? "assistant" : "user",
+                    text: item.text ?? "",
+                    attachments: [],
+                    streaming: item.status === "inProgress",
+                    createdBy: item.kind === "agentMessage" ? "agent" : "user",
+                    creationSource: "provider",
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                ]
+              : [],
           ),
-        );
+          runtimeRequests: [...pending.values()].map((entry) => entry.request),
+          providerPayload: items,
+        };
       });
       const runtime: ProviderAdapterV2SessionRuntime = {
         instanceId: options.instanceId,
@@ -1929,7 +1773,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         readThreadSnapshot: (args) =>
           (!validateThread(args.providerThread)
             ? protocolError("Snapshot requested for a different Muse thread")
-            : snapshot()
+            : snapshot(args.providerThread)
           ).pipe(
             commands.withPermits(1),
             Effect.mapError(
@@ -1941,148 +1785,24 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 }),
             ),
           ),
+        // Muse rejects forks at completed-turn boundaries (InvalidCut), so T3 uses
+        // portable context handoff for forks and does not rewind Muse conversations.
         rollbackThread: (args) =>
-          Effect.gen(function* () {
-            if (!validateThread(args.providerThread) || active)
-              return yield* protocolError("Stop the owning Muse thread before rollback");
-            const source = args.providerThread;
-            const target =
-              args.target.type === "provider_turn" ? args.target.providerTurn : undefined;
-            if (
-              target &&
-              !args.providerThreadTurns.some(
-                (turn) => turn.id === target.id && turn.providerThreadId === source.id,
-              )
-            )
-              return yield* protocolError("Muse rollback boundary is not part of this thread");
-            let adopted: OrchestrationV2ProviderThread;
-            if (target) {
-              const result = yield* forkNative(source, target);
-              adopted = yield* attachFork(
-                { ...source, nativeConversationHeadRef: target.nativeTurnRef },
-                result,
-              );
-            } else {
-              adopted = yield* Effect.gen(function* () {
-                hostEpoch++;
-                yield* Effect.tryPromise(() => host.close()).pipe(
-                  Effect.mapError((cause) =>
-                    protocolError("Cannot release Muse rollback source", cause),
-                  ),
-                );
-                yield* launchHost();
-                thread = undefined;
-                nativeSessionId = undefined;
-                providerTurns.clear();
-                messages.clear();
-                historyTerminals.clear();
-                observedChildren.clear();
-                const fresh = yield* register(
-                  {
-                    threadId: source.appThreadId ?? input.threadId,
-                    modelSelection: {
-                      ...input.modelSelection,
-                      model: session.model ?? input.modelSelection.model,
-                    },
-                    runtimePolicy: input.runtimePolicy,
-                    existingProviderThread: {
-                      ...source,
-                      nativeThreadRef: null,
-                      nativeConversationHeadRef: null,
-                    },
-                  },
-                  true,
-                );
-                const restarted: OrchestrationV2ProviderThread = {
-                  ...source,
-                  nativeThreadRef: fresh.nativeThreadRef,
-                  nativeConversationHeadRef: null,
-                  providerSessionId: input.providerSessionId,
-                  status: "idle",
-                  updatedAt: fresh.updatedAt,
-                };
-                thread = restarted;
-                return restarted;
-              }).pipe(
-                Effect.onError((cause) =>
-                  eventPermit.withPermits(1)(
-                    Effect.gen(function* () {
-                      thread ??= source;
-                      yield* updateThread({ status: "error" });
-                      yield* failHost(cause);
-                    }),
-                  ),
-                ),
-              );
-            }
-            for (const [id, turn] of providerTurns)
-              if (!target || turn.ordinal > target.ordinal) providerTurns.delete(id);
-            yield* updateThread(adopted);
-            return snapshotFromHistory(adopted);
-          }).pipe(
-            commands.withPermits(1),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRollbackThreadError({
-                  driver: MUSE_PROVIDER,
-                  providerThreadId: args.providerThread.id,
-                  checkpointId: args.target.checkpointId,
-                  cause,
-                }),
-            ),
+          Effect.fail(
+            new ProviderAdapterRollbackThreadError({
+              driver: MUSE_PROVIDER,
+              providerThreadId: args.providerThread.id,
+              checkpointId: args.target.checkpointId,
+              cause: "Muse Code does not support conversation rollback in T3 Code.",
+            }),
           ),
         forkThread: (args) =>
-          Effect.gen(function* () {
-            if (args.ownerNodeId)
-              return yield* protocolError("Muse does not support forking a native subagent thread");
-            if (args.runtimePolicy?.cwd && args.runtimePolicy.cwd !== cwd)
-              return yield* protocolError(
-                "Muse native forks require the same workspace; use a context handoff for another workspace",
-              );
-            const target = args.sourceProviderTurns?.find(
-              (turn) => turn.id === args.providerTurnId,
-            );
-            if (args.providerTurnId && !target)
-              return yield* protocolError("Muse fork boundary was not supplied");
-            const result = yield* forkNative(args.sourceProviderThread, target);
-            const createdAt = yield* DateTime.now;
-            return yield* attachFork(
-              {
-                ...args.sourceProviderThread,
-                id: idAllocator.derive.providerThread({
-                  driver: MUSE_PROVIDER,
-                  providerInstanceId: options.instanceId,
-                  nativeThreadId: result.session.sessionId,
-                }),
-                appThreadId: args.targetThreadId,
-                ownerNodeId: null,
-                providerSessionId: input.providerSessionId,
-                nativeThreadRef: nativeRef(result.session.sessionId),
-                nativeConversationHeadRef: target?.nativeTurnRef ?? null,
-                firstRunOrdinal: null,
-                lastRunOrdinal: null,
-                handoffIds: [],
-                pendingBackgroundTasks: [],
-                contextUsage: null,
-                forkedFrom: {
-                  providerThreadId: args.sourceProviderThread.id,
-                  ...(args.providerTurnId ? { providerTurnId: args.providerTurnId } : {}),
-                },
-                createdAt,
-                updatedAt: createdAt,
-              },
-              result,
-            );
-          }).pipe(
-            commands.withPermits(1),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterForkThreadError({
-                  driver: MUSE_PROVIDER,
-                  providerThreadId: args.sourceProviderThread.id,
-                  cause,
-                }),
-            ),
+          Effect.fail(
+            new ProviderAdapterForkThreadError({
+              driver: MUSE_PROVIDER,
+              providerThreadId: args.sourceProviderThread.id,
+              cause: "Muse Code does not support native forks in T3 Code.",
+            }),
           ),
       };
       return runtime;

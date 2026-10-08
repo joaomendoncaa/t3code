@@ -64,15 +64,6 @@ export const MuseSessionResult = Schema.Struct({
     }),
   ),
 });
-export const MuseViewPage = Schema.Struct({
-  events: Schema.Array(
-    Schema.Struct({
-      method: Schema.String,
-      params: Schema.Record(Schema.String, Schema.Unknown),
-    }),
-  ),
-  nextCursor: Schema.NullOr(NonEmptyString),
-});
 export const MuseTurnStartResult = Schema.Struct({ turnId: NonEmptyString });
 
 export const MuseApproval = Schema.Struct({
@@ -98,6 +89,8 @@ export const MuseApproval = Schema.Struct({
     access: Schema.optional(Schema.String),
     command: Schema.optional(Schema.String),
     path: Schema.optional(Schema.String),
+    host: Schema.optional(Schema.String),
+    target: Schema.optional(Schema.String),
   }),
 });
 export type MuseApproval = typeof MuseApproval.Type;

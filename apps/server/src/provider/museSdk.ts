@@ -22,6 +22,8 @@ export interface MuseSdkHost {
   >;
   readonly initializeResult: SpawnedMspConnection["initializeResult"];
   readonly exited: Promise<ProcessExit>;
+  /** The last lines Muse wrote to stderr, for explaining an unexpected exit. */
+  readonly stderrTail?: () => ReadonlyArray<string>;
   readonly close: () => Promise<void>;
 }
 
@@ -74,8 +76,10 @@ export async function createMuseSdkHost(
     command: options.binaryPath,
     args,
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    env: makeMuseEnvironment(options.environment),
-    shutdownTimeoutMs: 30_000,
+    // Callers pass an environment already built with makeMuseEnvironment.
+    env: options.environment ?? makeMuseEnvironment(),
+    // A healthy host exits at once; this only bounds a hung one on close.
+    shutdownTimeoutMs: 10_000,
   });
   let closePromise: Promise<void> | undefined;
   const close = () => {
@@ -114,6 +118,7 @@ export async function createMuseSdkHost(
       connection: host.connection,
       initializeResult: host.initializeResult,
       exited: host.exited,
+      stderrTail: () => handshake.child.stderrTail,
       close,
     };
   } catch (error) {

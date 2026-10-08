@@ -17,6 +17,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  MUSE_DEFAULT_MODEL,
   EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -46,7 +47,6 @@ import * as ProviderInstanceRegistryHydration from "../provider/ProviderInstance
 import * as ProviderEventLoggers from "../provider/ProviderEventLoggers.ts";
 import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
 import * as OpenCodeServerLedger from "../provider/OpenCodeServerLedger.ts";
-import { MUSE_DEFAULT_MODEL } from "../provider/MuseProvider.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -295,7 +295,11 @@ describe.runIf(binaryPath !== undefined && ROOT !== "")("Muse V2 live orchestrat
           "approve",
           "Run the shell command `touch approved.txt` with your shell tool, then reply DONE.",
         );
-        yield* waitFor(threadId, (projection) => pendingRequest(projection) !== undefined);
+        const asked = yield* waitFor(
+          threadId,
+          (projection) => pendingRequest(projection) !== undefined || settled(projection),
+        );
+        assert.equal(pendingRequest(asked)?.kind, "command");
         yield* answer("approve-answer", "accept");
         const approved = yield* waitFor(threadId, settled);
         assert.equal(approved.runs.at(-1)?.status, "completed");
@@ -311,8 +315,10 @@ describe.runIf(binaryPath !== undefined && ROOT !== "")("Muse V2 live orchestrat
         let declined = yield* waitFor(
           threadId,
           (projection) =>
-            projection.runs.length === runCount && pendingRequest(projection) !== undefined,
+            projection.runs.length === runCount &&
+            (pendingRequest(projection) !== undefined || settled(projection)),
         );
+        assert.isDefined(pendingRequest(declined));
         for (let retry = 0; pendingRequest(declined) !== undefined && retry < 4; retry += 1) {
           yield* answer(`decline-${retry}`, "decline");
           declined = yield* waitFor(
