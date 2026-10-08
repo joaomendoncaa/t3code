@@ -1553,10 +1553,11 @@ export interface ChatComposerProps {
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
-  /** Tokens Enter compacts before sending; null when the next send keeps full history. */
+  /** Tokens a stale session would re-read; null when the thread is not offered compaction. */
   resumeCompactionTokens: number | null;
-  /** Runs `send` as a one-off send that keeps full history instead of compacting first. */
+  /** The Compact chip is off, so the next send keeps full history. */
   keepFullHistory: boolean;
+  /** Flips the Compact chip for the active thread. */
   onToggleKeepFullHistory: () => void;
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
@@ -6894,8 +6895,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onClick={(event) => {
                     event.stopPropagation();
                     if (showResumeAction) onResume();
-                    // Compacting first is only sent from the labeled button, so expand to show it.
-                    else if (props.resumeCompactionTokens !== null) expandMobileComposer();
+                    // Compacting first only sends from the expanded composer, where the chip shows it.
+                    else if (props.resumeCompactionTokens !== null && !props.keepFullHistory)
+                      expandMobileComposer();
                     else submitComposer();
                   }}
                 >

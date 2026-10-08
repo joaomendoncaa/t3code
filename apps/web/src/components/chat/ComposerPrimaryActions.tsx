@@ -384,7 +384,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           }
         >
           <Minimize2Icon aria-hidden="true" />
-          {compact ? null : keepFullHistory ? "Full" : "Compact"}
+          {keepFullHistory ? "Full" : "Compact"}
           <span>{compactTokens}</span>
         </TooltipTrigger>
         <TooltipPopup>

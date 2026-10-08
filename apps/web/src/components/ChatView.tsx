@@ -7690,13 +7690,26 @@ export default function ChatView(props: ChatViewProps) {
     })
       ? activeContextWindow.usedTokens
       : null;
-  // The thread whose Compact chip is turned off. Keyed by thread so the choice
-  // never carries to another thread, and cleared by the send it applies to.
-  const [fullHistoryThreadKey, setFullHistoryThreadKey] = useState<string | null>(null);
-  const keepFullHistory = fullHistoryThreadKey !== null && fullHistoryThreadKey === activeThreadKey;
+  // Threads whose Compact chip is turned off, mapped to the context snapshot it
+  // was turned off for. The next accepted turn reports new usage, so the choice
+  // lapses on its own and a failed send keeps it.
+  const [fullHistoryChoices, setFullHistoryChoices] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+  const keepFullHistory =
+    activeThreadKey !== null &&
+    activeContextWindow !== null &&
+    fullHistoryChoices.get(activeThreadKey) === activeContextWindow.updatedAt;
+  const contextWindowUpdatedAt = activeContextWindow?.updatedAt ?? null;
   const toggleKeepFullHistory = useCallback(() => {
-    setFullHistoryThreadKey((current) => (current === activeThreadKey ? null : activeThreadKey));
-  }, [activeThreadKey]);
+    if (activeThreadKey === null || contextWindowUpdatedAt === null) return;
+    setFullHistoryChoices((current) => {
+      const next = new Map(current);
+      if (next.get(activeThreadKey) === contextWindowUpdatedAt) next.delete(activeThreadKey);
+      else next.set(activeThreadKey, contextWindowUpdatedAt);
+      return next;
+    });
+  }, [activeThreadKey, contextWindowUpdatedAt]);
   const handleRestoreThreadBranch = useCallback(() => {
     if (!canWriteSourceControl) return;
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {
@@ -9179,7 +9192,6 @@ export default function ChatView(props: ChatViewProps) {
       resumeCompactionTokens !== null &&
       !keepFullHistory &&
       messageTextForSend.toLowerCase() !== "/compact";
-    if (keepFullHistory) setFullHistoryThreadKey(null);
     const turnDispatchMode = compactBeforeSend ? "queue" : dispatchMode;
     const shouldQueueBehindActiveRun =
       compactBeforeSend || (phase === "running" && dispatchMode === "queue");
