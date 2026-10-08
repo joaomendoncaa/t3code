@@ -8,7 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import { ChildProcess } from "effect/unstable/process";
+import { ChildProcess } from "effect/process";
 
 import { createMuseSdkHost, makeMuseEnvironment } from "./museSdk.ts";
 import { parseMuseVersion } from "./museMaintenance.ts";
