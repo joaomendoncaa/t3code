@@ -250,6 +250,9 @@ export const make = Effect.gen(function* () {
             requires_connect_approval = 0
             OR proof_key_thumbprint IN (SELECT proof_key_thumbprint FROM auth_connect_devices)
           )
+          -- node:sqlite cannot bind booleans, so the undefined check ships
+          -- as 1/0 (regression from the better-sqlite3 port + Effect 4).
+
           AND (${requestedScopes === undefined ? 1 : 0} OR EXISTS (
             SELECT 1
             FROM json_each(${JSON.stringify(requestedScopes ?? [])}) AS requested
