@@ -7690,26 +7690,25 @@ export default function ChatView(props: ChatViewProps) {
     })
       ? activeContextWindow.usedTokens
       : null;
-  // Threads whose Compact chip is turned off, mapped to the context snapshot it
-  // was turned off for. The next accepted turn reports new usage, so the choice
-  // lapses on its own and a failed send keeps it.
-  const [fullHistoryChoices, setFullHistoryChoices] = useState<ReadonlyMap<string, string>>(
-    () => new Map(),
+  // Threads whose Compact chip is turned off. A send that starts its turn
+  // clears its thread's entry; a failed send keeps it for the retry.
+  const [fullHistoryThreadKeys, setFullHistoryThreadKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
-  const keepFullHistory =
-    activeThreadKey !== null &&
-    activeContextWindow !== null &&
-    fullHistoryChoices.get(activeThreadKey) === activeContextWindow.updatedAt;
-  const contextWindowUpdatedAt = activeContextWindow?.updatedAt ?? null;
-  const toggleKeepFullHistory = useCallback(() => {
-    if (activeThreadKey === null || contextWindowUpdatedAt === null) return;
-    setFullHistoryChoices((current) => {
-      const next = new Map(current);
-      if (next.get(activeThreadKey) === contextWindowUpdatedAt) next.delete(activeThreadKey);
-      else next.set(activeThreadKey, contextWindowUpdatedAt);
+  const keepFullHistory = fullHistoryThreadKeys.has(routeThreadKey);
+  const setKeepFullHistory = useCallback((threadKey: string, keep: boolean) => {
+    setFullHistoryThreadKeys((current) => {
+      if (current.has(threadKey) === keep) return current;
+      const next = new Set(current);
+      if (keep) next.add(threadKey);
+      else next.delete(threadKey);
       return next;
     });
-  }, [activeThreadKey, contextWindowUpdatedAt]);
+  }, []);
+  const toggleKeepFullHistory = useCallback(
+    () => setKeepFullHistory(routeThreadKey, !keepFullHistory),
+    [keepFullHistory, routeThreadKey, setKeepFullHistory],
+  );
   const handleRestoreThreadBranch = useCallback(() => {
     if (!canWriteSourceControl) return;
     if (gitStatusQuery.data?.hasWorkingTreeChanges) {
@@ -9904,6 +9903,7 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        setKeepFullHistory(routeThreadKey, false);
         // The turn is under way and will spend quota, so that thread's limits
         // snapshot is stale. Uploads may have outlasted a navigation, so only
         // the sending thread's panel clears.
