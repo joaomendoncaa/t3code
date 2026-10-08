@@ -45,7 +45,7 @@ import { makeMuseAdapterV2 } from "./MuseAdapterV2.ts";
 
 export const MUSE_PROVIDER_KIND = "muse";
 export const MUSE_MSP_REPLAY_PROTOCOL = "muse.msp-jsonl";
-export const MUSE_REPLAY_ANY = "<any>";
+const MUSE_REPLAY_ANY = "<any>";
 
 const MuseReplayTranscript = Schema.Struct({
   provider: Schema.Literal(MUSE_PROVIDER_KIND),

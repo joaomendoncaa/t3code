@@ -143,7 +143,8 @@ function makeRecordingCreateHost(
       entries.push({ type, ...(label === undefined ? {} : { label }), frame });
     };
     record("expect_outbound", { type: "host_start", args });
-    const child = NodeChildProcess.spawn(options.binaryPath, args, {
+    // The binary named by T3_MUSE_BIN, so the recorded version matches what ran.
+    const child = NodeChildProcess.spawn(museBinary, args, {
       cwd: options.cwd,
       env: options.environment ?? makeMuseEnvironment(),
       stdio: ["pipe", "pipe", "inherit"],
@@ -153,7 +154,8 @@ function makeRecordingCreateHost(
     );
     async function* incoming() {
       let buffer = "";
-      for await (const chunk of child.stdout) {
+      // utf8 decoding keeps a character split across chunks intact.
+      for await (const chunk of child.stdout.setEncoding("utf8")) {
         buffer += String(chunk);
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
