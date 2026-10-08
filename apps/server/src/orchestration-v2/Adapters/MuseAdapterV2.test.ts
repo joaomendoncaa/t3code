@@ -22,6 +22,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -40,6 +41,7 @@ import {
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
 } from "../ProviderAdapter.ts";
+import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import { makeMuseAdapterV2, type MuseAdapterV2Options } from "./MuseAdapterV2.ts";
 
 const testLayer = Layer.mergeAll(
@@ -192,7 +194,10 @@ const makeHarness = Effect.fnUntraced(function* (
   replacement?: Effect.Success<ReturnType<typeof makeFakeMuse>>,
   existingProviderThread?: OrchestrationV2ProviderThread,
   policy = runtimePolicy,
-  overrides: Pick<MuseAdapterV2Options, "createHost" | "nativeEventLogger" | "modelCatalog"> = {},
+  overrides: Pick<
+    MuseAdapterV2Options,
+    "createHost" | "nativeEventLogger" | "modelCatalog" | "continuationRequests"
+  > = {},
 ) {
   let hostCount = 0;
   const adapter = makeMuseAdapterV2({
@@ -761,6 +766,46 @@ describe("MuseAdapterV2", () => {
       assert.strictEqual(resolved.runtimeRequest.decision, "decline");
       acknowledgement.resolve({});
       yield* Fiber.join(responding);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("lets a user turn take a held Muse report turn, approvals included", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const offers: Array<ProviderContinuationRequest> = [];
+      const harness = yield* makeHarness(
+        fake,
+        INSTANCE_ID,
+        undefined,
+        undefined,
+        undefined,
+        runtimePolicy,
+        { continuationRequests: { offer: (request) => Effect.sync(() => offers.push(request)) } },
+      );
+      // A finished workflow's report turn starts while T3 runs nothing: it is held.
+      yield* fake.emit("turn/started", { turnId: "report-1" });
+      yield* Effect.yieldNow;
+      assert.lengthOf(offers, 1);
+      // The user sends a message first; Muse runs the report before it.
+      const { nativeId } = yield* startConversation(harness, fake);
+      yield* fake.emit("approval/requested", approval("report-1"));
+      const asked = yield* harness.takeEvent(
+        "runtime_request.updated",
+        (event) => event.runtimeRequest.status === "pending",
+      );
+      yield* harness.runtime.respondToRuntimeRequest({
+        requestId: asked.runtimeRequest.id,
+        decision: "accept",
+      });
+      yield* fake.takeCall("approval/decide");
+      yield* fake.emit("approval/resolved", { approvalId: "approval-1", turnId: "report-1" });
+      yield* fake.emit("turn/completed", { turnId: "report-1", terminal: "completed" });
+      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
+      const terminal = yield* harness.takeEvent("turn.terminal");
+      assert.strictEqual(terminal.status, "completed");
+      // The user turn took it, so the continuation is not dispatched.
+      const dispatched = yield* offers[0]!.dispatchIfCurrent!(Effect.succeed("run"));
+      assert.isTrue(Option.isNone(dispatched));
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

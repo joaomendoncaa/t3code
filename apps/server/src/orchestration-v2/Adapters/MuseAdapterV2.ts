@@ -23,6 +23,7 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -218,6 +219,8 @@ interface ActiveTurn {
   readonly input: ProviderAdapterV2TurnInput;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly nativeId: string;
+  /** Turns Muse started on its own while this run was active, which this run shows. */
+  readonly joined: Set<string>;
   readonly items: Map<string, MuseItem>;
   readonly ordinals: Map<string, number>;
   readonly started: Map<string, DateTime.Utc>;
@@ -685,12 +688,14 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         const failed = host;
         yield* Effect.tryPromise(() => failed.close()).pipe(Effect.ignore, Effect.forkIn(scope));
       });
+      const owns = (turn: ActiveTurn, turnId: string) =>
+        turnId === turn.nativeId || turn.joined.has(turnId);
       const publishRequest = Effect.fnUntraced(function* (native: PendingRequest["native"]) {
         const turn = active;
         if (
           !turn ||
           native.value.sessionId !== nativeSessionId ||
-          (native.value.turnId && native.value.turnId !== turn.nativeId)
+          (native.value.turnId && !owns(turn, native.value.turnId))
         )
           return;
         const nativeId =
@@ -847,19 +852,34 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           }
         }
         // Muse starts a turn on its own when a workflow finishes, to report its result.
-        // Hold it and ask the orchestrator for a run; that run takes the held events.
-        if (method === "turn/started" && typeof params.turnId === "string" && !active && !wake) {
-          wake = { nativeId: params.turnId, events: [] };
-          const reports = finishedBackground.splice(0);
-          const notification = backgroundWorkNotification(reports);
-          if (thread?.appThreadId && options.continuationRequests)
-            yield* options.continuationRequests.offer({
-              threadId: thread.appThreadId,
-              providerThreadId: thread.id,
-              driver: MUSE_PROVIDER,
-              detail: null,
-              ...(notification ? { notification } : {}),
-            });
+        // During a run, that run shows it. Otherwise hold it and ask the orchestrator for
+        // a run; that run takes the held events, unless a user turn takes them first.
+        if (
+          method === "turn/started" &&
+          typeof params.turnId === "string" &&
+          params.turnId !== active?.nativeId &&
+          params.turnId !== wake?.nativeId
+        ) {
+          if (active && !active.compact) active.joined.add(params.turnId);
+          else if (!active && !wake) {
+            const held = { nativeId: params.turnId, events: [] };
+            wake = held;
+            const notification = backgroundWorkNotification(finishedBackground.splice(0));
+            if (thread?.appThreadId && options.continuationRequests)
+              yield* options.continuationRequests.offer({
+                threadId: thread.appThreadId,
+                providerThreadId: thread.id,
+                driver: MUSE_PROVIDER,
+                detail: null,
+                ...(notification ? { notification } : {}),
+                dispatchIfCurrent: (dispatch) =>
+                  wake === held ? Effect.map(dispatch, Option.some) : Effect.succeed(Option.none()),
+                clearIfCurrent: () =>
+                  Effect.sync(() => {
+                    if (wake === held) wake = undefined;
+                  }),
+              });
+          }
         }
         if (wake && active?.nativeId !== wake.nativeId) {
           const turnId = typeof params.turnId === "string" ? params.turnId : itemEvent?.turnId;
@@ -870,7 +890,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         }
         const turn = active;
         if (!turn) return;
-        if (typeof params.turnId === "string" && params.turnId !== turn.nativeId && !turn.compact)
+        if (typeof params.turnId === "string" && !owns(turn, params.turnId) && !turn.compact)
           return;
         switch (method) {
           case "item/started":
@@ -879,7 +899,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             const item = itemEvent!;
             if (
               item.turnId &&
-              item.turnId !== turn.nativeId &&
+              !owns(turn, item.turnId) &&
               !(turn.compact && item.kind === "compaction")
             )
               return;
@@ -933,6 +953,8 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           case "turn/completed": {
             if (turn.compact) return;
             const result = yield* decode(MuseTurnCompleted, params);
+            // A joined Muse turn ending does not end this run; its own turn does.
+            if (result.turnId !== turn.nativeId) break;
             if (result.usage) {
               const usage = result.usage;
               turn.providerTurn = {
@@ -1487,6 +1509,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           input: turnInput,
           providerTurn,
           nativeId,
+          joined: new Set(),
           items: new Map(),
           ordinals: new Map(),
           started: new Map(),
@@ -1513,13 +1536,14 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             lastRunOrdinal: turnInput.runOrdinal,
           });
           yield* updateSession("running");
-          if (continuation) {
-            wake = undefined;
-            // Its turn may have ended already; then the held turn/completed ends this run.
-            if (!adopted) return yield* finish(turn, "completed");
-            for (const [method, data] of adopted.events)
-              yield* handleNotification(method, data).pipe(Effect.catch(failHost));
-          }
+          // A user turn takes a held Muse turn: Muse runs it first, so this run shows it
+          // (and its approvals), and the continuation asked for it is no longer needed.
+          const held = wake;
+          wake = undefined;
+          if (continuation && !held) return yield* finish(turn, "completed");
+          if (held && !continuation) turn.joined.add(held.nativeId);
+          for (const [method, data] of held?.events ?? [])
+            yield* handleNotification(method, data).pipe(Effect.catch(failHost));
         }).pipe(eventPermit.withPermits(1));
         if (continuation) return;
         yield* Effect.gen(function* () {
@@ -1732,6 +1756,9 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
               );
               return;
             }
+            // Muse runs a joined turn first, so Stop must end it too.
+            for (const joined of turn.joined)
+              yield* request("turn/interrupt", { turnId: joined }).pipe(Effect.ignore);
             yield* request("turn/interrupt", { turnId: turn.nativeId });
             yield* Deferred.await(turn.done).pipe(
               Effect.timeout(options.requestTimeoutMs ?? 30_000),
