@@ -83,9 +83,10 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
   const list = tree.visible;
 
   const totals = useMemo(() => {
+    // Full-scope totals: collapsing a folder must not shrink the counts.
     let add = 0;
     let del = 0;
-    for (const row of list) {
+    for (const row of visible) {
       if (row.status === "add") add += 1;
       else if (row.status === "del") del += 1;
       else if (row.status === "mod") {
@@ -94,7 +95,7 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
       }
     }
     return { add, del };
-  }, [list]);
+  }, [visible]);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageH, setStageH] = useState(0);
