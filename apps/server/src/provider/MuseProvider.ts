@@ -1,8 +1,4 @@
-import {
-  type CustomModelSetting,
-  type MuseSettings,
-  type ServerProviderModel,
-} from "@t3tools/contracts";
+import type { MuseSettings, ServerProviderModel } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -29,24 +25,7 @@ const MUSE_PRESENTATION = {
   reportsContextWindow: true,
 } as const;
 
-export const MUSE_DEFAULT_MODEL = "muse-spark-1.3-contributor";
-
-function museModelsFromSettings(
-  models: ReadonlyArray<ServerProviderModel>,
-  customModels: ReadonlyArray<CustomModelSetting>,
-) {
-  return providerModelsFromSettings(
-    models,
-    customModels.map((entry) => {
-      const model = typeof entry === "string" ? { slug: entry } : entry;
-      return {
-        ...model,
-        capabilities: model.capabilities ?? museModelCapabilities(model.slug.trim()),
-      };
-    }),
-    museModelCapabilities(""),
-  );
-}
+const FALLBACK_CAPABILITIES = museModelCapabilities();
 
 export const makePendingMuseProvider = Effect.fn("makePendingMuseProvider")(function* (
   settings: MuseSettings,
@@ -55,7 +34,7 @@ export const makePendingMuseProvider = Effect.fn("makePendingMuseProvider")(func
     presentation: MUSE_PRESENTATION,
     enabled: settings.enabled,
     checkedAt: DateTime.formatIso(yield* DateTime.now),
-    models: museModelsFromSettings([], settings.customModels),
+    models: providerModelsFromSettings([], settings.customModels, FALLBACK_CAPABILITIES),
     slashCommands: settings.enabled ? [COMPACT_SLASH_COMMAND] : [],
     probe: {
       installed: false,
@@ -77,13 +56,14 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
 ) {
   if (!settings.enabled) return yield* makePendingMuseProvider(settings);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const museEnvironment = makeMuseEnvironment(environment);
+  // The driver passes a prepared environment; direct callers get the host's without META_API_KEY.
+  const museEnvironment = environment ?? makeMuseEnvironment();
   const snapshot = (probe: ProviderProbeResult, models: ReadonlyArray<ServerProviderModel> = []) =>
     buildServerProvider({
       presentation: MUSE_PRESENTATION,
       enabled: true,
       checkedAt,
-      models: museModelsFromSettings(models, settings.customModels),
+      models: providerModelsFromSettings(models, settings.customModels, FALLBACK_CAPABILITIES),
       slashCommands: [COMPACT_SLASH_COMMAND],
       probe,
     });
@@ -150,16 +130,20 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
     });
   }
   const models = catalog.success.value;
+  // MSP has no auth signal, and model/list answers from Muse's cache even when logged out.
+  // Auth failures surface on the first turn instead.
   return snapshot(
     {
       installed: true,
       version,
-      status: models.length > 0 ? "ready" : "warning",
       auth: { status: "unknown" },
-      message:
-        models.length > 0
-          ? "Muse Code is available. Authentication and subscription billing are not reported by the SDK; use `muse login` on this T3 server host."
-          : "Muse Code returned no models. Run `muse login` on this T3 server host and refresh its status.",
+      ...(models.length > 0
+        ? { status: "ready" }
+        : {
+            status: "warning",
+            message:
+              "Muse Code returned no models. Run `muse login` on this T3 server host and refresh its status.",
+          }),
     },
     models,
   );

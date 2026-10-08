@@ -18,12 +18,8 @@ import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
 import { checkMuseProviderStatus, makePendingMuseProvider } from "../MuseProvider.ts";
 import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import {
-  compareMuseVersions,
-  enrichMuseSnapshot,
-  latestMuseVersion,
-  museMaintenance,
-} from "../museMaintenance.ts";
+import { enrichMuseSnapshot, latestMuseVersion, museMaintenance } from "../museMaintenance.ts";
+import { makeMuseEnvironment } from "../museSdk.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -72,7 +68,11 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
       const { cwd } = serverConfig;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const hostEnvironment = yield* HostProcessEnvironment;
-      const processEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
+      // Drop an inherited META_API_KEY so Muse uses its login; an instance value still wins.
+      const processEnvironment = mergeProviderInstanceEnvironment(
+        environment,
+        makeMuseEnvironment(hostEnvironment),
+      );
       const effectiveConfig = {
         ...config,
         enabled,
@@ -110,11 +110,7 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
                 Effect.provideService(HttpClient.HttpClient, httpClient),
               )
             : undefined;
-          return {
-            ...capabilities,
-            compareVersions: compareMuseVersions,
-            ...(latestVersion !== undefined ? { latestVersion } : {}),
-          };
+          return latestVersion !== undefined ? { ...capabilities, latestVersion } : capabilities;
         });
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<MuseSettings>>({
         resolveMaintenance,
@@ -165,12 +161,10 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
         modelCatalog,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
-      const textGeneration = yield* makeMuseTextGeneration(
-        effectiveConfig,
-        processEnvironment,
-        undefined,
+      const textGeneration = yield* makeMuseTextGeneration(effectiveConfig, {
+        environment: processEnvironment,
         modelCatalog,
-      );
+      });
       return {
         instanceId,
         driverKind: DRIVER_KIND,

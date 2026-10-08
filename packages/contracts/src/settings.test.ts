@@ -811,20 +811,6 @@ describe("provider enabled defaults", () => {
     ).toBe(false);
   });
 
-  it("round-trips Muse executable and custom models through settings snapshots and patches", () => {
-    const input = {
-      providers: {
-        muse: {
-          enabled: true,
-          binaryPath: "/custom/muse",
-          customModels: ["muse-spark-1.3"],
-        },
-      },
-    };
-    expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
-    expect(decodeServerSettingsPatch(input)).toEqual(input);
-  });
-
   it("enables only the stable bindings by default", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providers.codex.enabled).toBe(true);

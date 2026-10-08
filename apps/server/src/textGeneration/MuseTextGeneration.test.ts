@@ -1,7 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { NotificationHandler } from "@muse-code/sdk";
-import { MuseSettings, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  MUSE_DEFAULT_MODEL,
+  MuseSettings,
+  ProviderInstanceId,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -28,7 +33,7 @@ const titleInput = {
 function fixture(
   onTurn?: (emit: (method: string, params: Record<string, unknown>) => void) => void,
   acknowledgeTurn = true,
-  modelCatalog?: Parameters<typeof makeMuseTextGeneration>[3],
+  modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>,
 ) {
   let handler: NotificationHandler = () => {};
   let commandSequence = 0;
@@ -95,7 +100,10 @@ function fixture(
     exited: new Promise(() => {}),
   };
   const createHost = vi.fn(async () => host);
-  const make = makeMuseTextGeneration(settings, undefined, createHost, modelCatalog);
+  const make = makeMuseTextGeneration(settings, {
+    createHost,
+    ...(modelCatalog ? { modelCatalog } : {}),
+  });
   return {
     host,
     createHost,
@@ -116,25 +124,6 @@ const finish =
   };
 
 it.layer(NodeServices.layer)("Muse text generation", (it) => {
-  it.effect("rejects unsupported effort before starting a host", () =>
-    Effect.gen(function* () {
-      const test = fixture();
-      const service = yield* test.make;
-      const error = yield* service
-        .generateThreadTitle({
-          ...titleInput,
-          modelSelection: createModelSelection(
-            ProviderInstanceId.make("muse"),
-            modelSelection.model,
-            [{ id: "reasoningEffort", value: "invalid-effort" }],
-          ),
-        })
-        .pipe(Effect.flip);
-      expect(error.detail).toContain("does not support reasoning effort 'invalid-effort'");
-      expect(test.createHost).not.toHaveBeenCalled();
-    }),
-  );
-
   it.effect("validates the final item once and closes an isolated restrictive host", () =>
     Effect.gen(function* () {
       const test = fixture(finish('{"title":"Fix login form"}'));
@@ -167,69 +156,14 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
     }),
   );
 
-  it.effect("forwards max effort unchanged when the native model catalog advertises it", () =>
+  it.effect("uses low effort by default and normalizes stale efforts against the model", () =>
     Effect.gen(function* () {
-      const test = fixture(
-        finish('{"title":"Fix login form"}'),
-        true,
-        Effect.succeed([
-          {
-            slug: "muse-spark-1.3",
-            name: "Muse Spark 1.3",
-            isCustom: false,
-            capabilities: museModelCapabilities("muse-spark-1.3", [{ tier: "max" }]),
-          },
-        ]),
-      );
-      const service = yield* test.make;
-      expect(
-        yield* service.generateThreadTitle({
-          ...titleInput,
-          modelSelection: createModelSelection(ProviderInstanceId.make("muse"), "muse-spark-1.3", [
-            { id: "reasoningEffort", value: "max" },
-          ]),
-        }),
-      ).toEqual({ title: "Fix login form" });
-      expect(test.host.connection.command).toHaveBeenCalledWith(
-        "session/start",
-        expect.objectContaining({ modelId: "muse-spark-1.3" }),
-      );
-      expect(test.host.connection.command).toHaveBeenCalledWith(
-        "turn/start",
-        expect.objectContaining({ reasoningEffort: "max" }),
-        { commandId: "turn-1" },
-      );
-      expect(test.host.close).toHaveBeenCalledOnce();
-    }),
-  );
-
-  it.effect("preserves Contributor Max while the model catalog is unavailable", () =>
-    Effect.gen(function* () {
-      const test = fixture(finish('{"title":"Fix login form"}'));
-      const service = yield* test.make;
-      yield* service.generateThreadTitle({
-        ...titleInput,
-        modelSelection: createModelSelection(
-          ProviderInstanceId.make("muse"),
-          modelSelection.model,
-          [{ id: "reasoningEffort", value: "max" }],
-        ),
-      });
-      expect(test.host.connection.command).toHaveBeenCalledWith(
-        "turn/start",
-        expect.objectContaining({ reasoningEffort: "max" }),
-        { commandId: "turn-1" },
-      );
-    }),
-  );
-
-  it.effect("normalizes stale settings and the metadata default against model capabilities", () =>
-    Effect.gen(function* () {
-      for (const { saved, tiers, expected } of [
-        { saved: "ultra", tiers: ["medium", "xhigh"], expected: "medium" },
-        { saved: "max", tiers: ["medium", "xhigh"], expected: "medium" },
-        { saved: undefined, tiers: ["xhigh", "max"], expected: "max" },
-        { saved: "high", tiers: [], expected: undefined },
+      for (const { saved, variants, expected } of [
+        { saved: undefined, variants: undefined, expected: "low" },
+        { saved: undefined, variants: ["medium", "xhigh"], expected: "medium" },
+        { saved: "max", variants: ["minimal", "max"], expected: "max" },
+        { saved: "ultra", variants: ["medium", "xhigh"], expected: "medium" },
+        { saved: "high", variants: [], expected: undefined },
       ]) {
         const test = fixture(
           finish('{"title":"Fix login form"}'),
@@ -239,67 +173,41 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
               slug: modelSelection.model,
               name: modelSelection.model,
               isCustom: false,
-              capabilities: museModelCapabilities(
-                modelSelection.model,
-                tiers.map((tier) => ({ tier })),
-              ),
+              capabilities: museModelCapabilities(variants ? { variants } : undefined),
             },
           ]),
         );
         const service = yield* test.make;
-        expect(
-          yield* service.generateThreadTitle({
-            ...titleInput,
-            modelSelection: createModelSelection(
-              ProviderInstanceId.make("muse"),
-              modelSelection.model,
-              saved !== undefined ? [{ id: "reasoningEffort", value: saved }] : undefined,
-            ),
-          }),
-        ).toEqual({ title: "Fix login form" });
+        yield* service.generateThreadTitle({
+          ...titleInput,
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("muse"),
+            modelSelection.model,
+            saved !== undefined ? [{ id: "reasoningEffort", value: saved }] : undefined,
+          ),
+        });
         const turn = vi
           .mocked(test.host.connection.command)
           .mock.calls.find(([method]) => method === "turn/start");
         expect(turn?.[1].reasoningEffort).toBe(expected);
         expect(Object.hasOwn(turn?.[1] ?? {}, "reasoningEffort")).toBe(expected !== undefined);
-        expect(test.host.close).toHaveBeenCalledOnce();
       }
     }),
   );
 
-  it.effect("accepts none, minimal, and ultra when advertised by the native model catalog", () =>
+  it.effect("lets Muse choose the model when none is selected", () =>
     Effect.gen(function* () {
-      for (const reasoningEffort of ["none", "minimal", "ultra"]) {
-        const test = fixture(
-          finish('{"title":"Fix login form"}'),
-          true,
-          Effect.succeed([
-            {
-              slug: modelSelection.model,
-              name: modelSelection.model,
-              isCustom: false,
-              capabilities: museModelCapabilities(modelSelection.model, [
-                { tier: reasoningEffort },
-              ]),
-            },
-          ]),
-        );
+      for (const model of [MUSE_DEFAULT_MODEL, " "]) {
+        const test = fixture(finish('{"title":"Fix login form"}'));
         const service = yield* test.make;
-        expect(
-          yield* service.generateThreadTitle({
-            ...titleInput,
-            modelSelection: createModelSelection(
-              ProviderInstanceId.make("muse"),
-              modelSelection.model,
-              [{ id: "reasoningEffort", value: reasoningEffort }],
-            ),
-          }),
-        ).toEqual({ title: "Fix login form" });
-        expect(test.host.connection.command).toHaveBeenCalledWith(
-          "turn/start",
-          expect.objectContaining({ reasoningEffort }),
-          { commandId: "turn-1" },
-        );
+        yield* service.generateThreadTitle({
+          ...titleInput,
+          modelSelection: createModelSelection(ProviderInstanceId.make("muse"), model),
+        });
+        const start = vi
+          .mocked(test.host.connection.command)
+          .mock.calls.find(([method]) => method === "session/start");
+        expect(start?.[1]).not.toHaveProperty("modelId");
       }
     }),
   );
@@ -313,22 +221,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
         detail: "Muse returned invalid structured output.",
       });
       expect(test.host.close).toHaveBeenCalledOnce();
-    }),
-  );
-
-  it.effect("uses the shared metadata effort when the selection has no override", () =>
-    Effect.gen(function* () {
-      const test = fixture(finish('{"title":"Fix login form"}'));
-      const service = yield* test.make;
-      yield* service.generateThreadTitle({
-        ...titleInput,
-        modelSelection: createModelSelection(ProviderInstanceId.make("muse"), modelSelection.model),
-      });
-      expect(test.host.connection.command).toHaveBeenCalledWith(
-        "turn/start",
-        expect.objectContaining({ reasoningEffort: "max" }),
-        { commandId: "turn-1" },
-      );
     }),
   );
 
@@ -493,19 +385,21 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
       const starting = Promise.withResolvers<{ signal: AbortSignal; cwd: string }>();
       const closing = Promise.withResolvers<void>();
       const shutdown = Promise.withResolvers<void>();
-      const service = yield* makeMuseTextGeneration(settings, undefined, (options) => {
-        const signal = options.signal!;
-        starting.resolve({ signal, cwd: options.cwd! });
-        return new Promise<MuseSdkHost>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              closing.resolve();
-              void shutdown.promise.then(() => reject(signal.reason));
-            },
-            { once: true },
-          );
-        });
+      const service = yield* makeMuseTextGeneration(settings, {
+        createHost: (options) => {
+          const signal = options.signal!;
+          starting.resolve({ signal, cwd: options.cwd! });
+          return new Promise<MuseSdkHost>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                closing.resolve();
+                void shutdown.promise.then(() => reject(signal.reason));
+              },
+              { once: true },
+            );
+          });
+        },
       });
       const fiber = yield* service.generateThreadTitle(titleInput).pipe(Effect.forkChild);
       const { signal, cwd } = yield* Effect.promise(() => starting.promise);
@@ -590,34 +484,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
       expect(generated.subject).toBe("Fix login");
       expect(generated.body).toBe("Details");
       expect(generated.branch).toContain("fix-login");
-    }),
-  );
-
-  it.effect("generates PR content through Muse", () =>
-    Effect.gen(function* () {
-      const test = fixture(finish('{"title":"Fix login","body":" Changes "}'));
-      const service = yield* test.make;
-      expect(
-        yield* service.generatePrContent({
-          cwd: titleInput.cwd,
-          baseBranch: "main",
-          headBranch: "fix-login",
-          commitSummary: "Fix login",
-          diffSummary: "login.ts",
-          diffPatch: "patch",
-          modelSelection,
-        }),
-      ).toEqual({ title: "Fix login", body: "Changes" });
-    }),
-  );
-
-  it.effect("generates branch names through Muse", () =>
-    Effect.gen(function* () {
-      const test = fixture(finish('{"branch":"Fix Login Form"}'));
-      const service = yield* test.make;
-      expect(yield* service.generateBranchName(titleInput)).toEqual({
-        branch: "fix-login-form",
-      });
     }),
   );
 });

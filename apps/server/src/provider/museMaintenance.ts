@@ -6,7 +6,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
-import { makeMuseEnvironment } from "./museSdk.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeManualOnlyProviderMaintenanceCapabilities,
@@ -18,7 +17,8 @@ import {
 import { parseGenericCliVersion } from "./providerSnapshot.ts";
 
 const DRIVER = ProviderDriverKind.make("muse");
-const STABLE_CHANNEL_URL = "https://api.meta.ai/muse-code/channels/muse-stable";
+/** Mirrors the official launcher, which reads MUSE_CHANNEL and accepts only these two. */
+const MUSE_CHANNELS = new Set(["muse-stable", "muse-canary"]);
 const ChannelManifest = Schema.Struct({
   version: Schema.String.check(Schema.isPattern(/^\d+\.\d+\.\d+-R\d+(?:\.\d+)?$/)),
 });
@@ -40,10 +40,10 @@ export const compareMuseVersions = (current: string, latest: string) =>
 export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {
   resolve: (context) =>
     Effect.gen(function* () {
-      const manual = makeManualOnlyProviderMaintenanceCapabilities({
-        provider: DRIVER,
-        packageName: null,
-      });
+      const manual = {
+        ...makeManualOnlyProviderMaintenanceCapabilities({ provider: DRIVER, packageName: null }),
+        compareVersions: compareMuseVersions,
+      };
       if (!context || context.platform === "win32") return manual;
       const fs = yield* FileSystem.FileSystem;
       const isLauncher = yield* Effect.gen(function* () {
@@ -55,41 +55,43 @@ export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {
       if (!isLauncher) return manual;
       // The launcher has no `update` subcommand. Its documented launch environment
       // forces a synchronous refresh of this executable's own installation.
-      const capabilities = makeProviderMaintenanceCapabilities({
-        provider: DRIVER,
-        packageName: null,
-        updateExecutable: context.resolvedCommandPath,
-        updateArgs: ["--version"],
-        updateLockKey: `muse:${context.realCommandPath}`,
-        platform: context.platform,
-        env: {
-          ...makeMuseEnvironment(context.env),
-          MUSE_NO_AUTO_UPDATE: "0",
-          MUSE_SYNC_UPDATE: "1",
-          MUSE_UPDATE_INTERVAL_SECONDS: "0",
-        },
-      });
-      const channel = context.env.MUSE_CHANNEL_URL;
-      const channelAssignment = channel
-        ? `MUSE_CHANNEL_URL='${channel.replaceAll("'", "'\\''")}' `
-        : "";
+      const updateEnv = {
+        ...(context.env.MUSE_CHANNEL ? { MUSE_CHANNEL: context.env.MUSE_CHANNEL } : {}),
+        MUSE_NO_AUTO_UPDATE: "0",
+        MUSE_SYNC_UPDATE: "1",
+        MUSE_UPDATE_INTERVAL_SECONDS: "0",
+      };
       return {
-        ...capabilities,
-        update: capabilities.update
-          ? {
-              ...capabilities.update,
-              command: `${channelAssignment}MUSE_NO_AUTO_UPDATE=0 MUSE_SYNC_UPDATE=1 MUSE_UPDATE_INTERVAL_SECONDS=0 ${capabilities.update.command}`,
-            }
-          : null,
+        ...makeProviderMaintenanceCapabilities({
+          provider: DRIVER,
+          packageName: null,
+          updateExecutable: context.resolvedCommandPath,
+          updateArgs: ["--version"],
+          updateCommand: [
+            ...Object.entries(updateEnv).map(([key, value]) => `${key}=${shellQuote(value)}`),
+            shellQuote(context.resolvedCommandPath),
+            "--version",
+          ].join(" "),
+          updateLockKey: `muse:${context.realCommandPath}`,
+          platform: context.platform,
+          env: { ...context.env, ...updateEnv },
+        }),
+        compareVersions: compareMuseVersions,
       };
     }),
 };
+
+function shellQuote(word: string) {
+  return /^[\w./:@=-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
 
 export const latestMuseVersion = Effect.fn("latestMuseVersion")(function* (
   environment: NodeJS.ProcessEnv,
   options?: { readonly fresh?: boolean },
 ) {
-  const channelUrl = environment.MUSE_CHANNEL_URL || STABLE_CHANNEL_URL;
+  const channel = environment.MUSE_CHANNEL || "muse-stable";
+  if (!MUSE_CHANNELS.has(channel)) return null;
+  const channelUrl = `https://api.meta.ai/muse-code/channels/${channel}`;
   const cache = yield* ProviderVersionCache;
   const key = `muse:${channelUrl}`;
   const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -126,7 +128,7 @@ export const enrichMuseSnapshot = Effect.fn("enrichMuseSnapshot")(function* (inp
       : null;
   return yield* enrichProviderSnapshotWithVersionAdvisory(
     snapshot,
-    { ...input.maintenanceCapabilities, latestVersion, compareVersions: compareMuseVersions },
+    { ...input.maintenanceCapabilities, latestVersion },
     { enableProviderUpdateChecks: input.enableProviderUpdateChecks },
   );
 });

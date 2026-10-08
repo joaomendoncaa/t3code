@@ -17,10 +17,13 @@ import {
   makeManualOnlyProviderMaintenanceCapabilities,
 } from "./providerMaintenance.ts";
 
-const maintenanceCapabilities = makeManualOnlyProviderMaintenanceCapabilities({
-  provider: ProviderDriverKind.make("muse"),
-  packageName: null,
-});
+const maintenanceCapabilities = {
+  ...makeManualOnlyProviderMaintenanceCapabilities({
+    provider: ProviderDriverKind.make("muse"),
+    packageName: null,
+  }),
+  compareVersions: compareMuseVersions,
+};
 const snapshot: ServerProvider = {
   instanceId: ProviderInstanceId.make("muse"),
   driver: ProviderDriverKind.make("muse"),
@@ -91,7 +94,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
           snapshot,
           maintenanceCapabilities,
           enableProviderUpdateChecks: true,
-          environment: { MUSE_CHANNEL_URL: "https://example.com/muse-preview" },
+          environment: { MUSE_CHANNEL: "muse-canary" },
         });
         const [first, second] = yield* Effect.all([check, check], { concurrency: 1 }).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -104,7 +107,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
           canUpdate: false,
         });
         expect(second.versionAdvisory?.latestVersion).toBe("1.1.1-R2514.1");
-        expect(requests).toEqual(["https://example.com/muse-preview"]);
+        expect(requests).toEqual(["https://api.meta.ai/muse-code/channels/muse-canary"]);
       }),
   );
 
@@ -195,10 +198,7 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
           resolvedCommandPath: binaryPath,
           realCommandPath: binaryPath,
           platform: "linux" as const,
-          env: {
-            MUSE_CHANNEL_URL: "https://example.com/channel",
-            META_API_KEY: "must-not-be-forwarded",
-          },
+          env: { MUSE_CHANNEL: "muse-canary" },
         };
         yield* fs.writeFileString(
           binaryPath,
@@ -210,15 +210,16 @@ it.layer(NodeServices.layer)("Muse maintenance", (it) => {
           args: ["--version"],
           lockKey: `muse:${binaryPath}`,
           env: {
-            MUSE_CHANNEL_URL: "https://example.com/channel",
+            MUSE_CHANNEL: "muse-canary",
             MUSE_NO_AUTO_UPDATE: "0",
             MUSE_SYNC_UPDATE: "1",
             MUSE_UPDATE_INTERVAL_SECONDS: "0",
           },
         });
-        expect(result.update?.env).not.toHaveProperty("META_API_KEY");
-        expect(result.update?.command).toContain(`'${binaryPath}' --version`);
-        expect(result.update?.command).toContain("MUSE_CHANNEL_URL='https://example.com/channel'");
+        expect(result.update?.command).toBe(
+          `MUSE_CHANNEL=muse-canary MUSE_NO_AUTO_UPDATE=0 MUSE_SYNC_UPDATE=1 MUSE_UPDATE_INTERVAL_SECONDS=0 '${binaryPath}' --version`,
+        );
+        expect(result.compareVersions).toBe(compareMuseVersions);
         yield* fs.writeFileString(binaryPath, "standalone binary");
         expect((yield* museMaintenance.resolve(context)).update).toBeNull();
         expect((yield* museMaintenance.resolve(null)).update).toBeNull();

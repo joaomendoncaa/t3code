@@ -1,6 +1,6 @@
-import type { SendUserTurnOptions } from "@muse-code/sdk";
 import {
-  MUSE_REASONING_EFFORT_OPTIONS,
+  DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+  MUSE_DEFAULT_MODEL,
   type ModelSelection,
   type MuseSettings,
   type ServerProviderModel,
@@ -14,7 +14,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { MUSE_DEFAULT_MODEL } from "../provider/MuseProvider.ts";
 import {
   createMuseSdkHost,
   createMuseSdkHostEffect,
@@ -73,11 +72,6 @@ const decodeApproval = Schema.decodeUnknownSync(ApprovalRequested);
 const decodeUserInput = Schema.decodeUnknownSync(UserInputRequested);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
-const SUPPORTED_EFFORTS = new Set<string>(
-  MUSE_REASONING_EFFORT_OPTIONS.map((option) => option.id) satisfies ReadonlyArray<
-    NonNullable<SendUserTurnOptions<never>["reasoningEffort"]>
-  >,
-);
 
 type Operation = keyof TextGeneration.TextGeneration["Service"];
 
@@ -85,7 +79,7 @@ async function generateMuseText(
   host: MuseSdkHost,
   workspaceRoot: string,
   prompt: string,
-  selection: ModelSelection,
+  modelId: string | undefined,
   reasoningEffort: string | undefined,
   signal: AbortSignal,
 ) {
@@ -183,7 +177,7 @@ async function generateMuseText(
       await host.connection.command("session/start", {
         workspaceRoot,
         providerId: "meta",
-        modelId: selection.model.trim() || MUSE_DEFAULT_MODEL,
+        ...(modelId ? { modelId } : {}),
         approvalMode: "denyUnmatched",
       }),
     );
@@ -205,10 +199,14 @@ async function generateMuseText(
 
 export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(function* (
   settings: MuseSettings,
-  environment?: NodeJS.ProcessEnv,
-  createHost: typeof createMuseSdkHost = createMuseSdkHost,
-  modelCatalog: Effect.Effect<ReadonlyArray<ServerProviderModel>> = Effect.succeed([]),
+  options: {
+    readonly environment?: NodeJS.ProcessEnv;
+    readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
+    /** Test hook. */
+    readonly createHost?: typeof createMuseSdkHost;
+  } = {},
 ) {
+  const { environment, modelCatalog = Effect.succeed([]), createHost } = options;
   const fileSystem = yield* FileSystem.FileSystem;
   const runMuseJson = Effect.fn("runMuseJson")(function* <S extends Schema.Top>(input: {
     operation: Operation;
@@ -220,22 +218,15 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     if (!settings.enabled) {
       return yield* new TextGenerationError({ operation, detail: "Muse Code is disabled." });
     }
-    const selectedEffort = getModelSelectionStringOptionValue(
-      input.modelSelection,
-      "reasoningEffort",
-    );
-    if (selectedEffort !== undefined && !SUPPORTED_EFFORTS.has(selectedEffort)) {
-      return yield* new TextGenerationError({
-        operation,
-        detail: `Muse does not support reasoning effort '${selectedEffort}'. Choose ${[...SUPPORTED_EFFORTS].join(", ")}.`,
-      });
-    }
+    const selectedModel = input.modelSelection.model.trim();
+    // Without a model, Muse starts the session on the account's default.
+    const modelId =
+      selectedModel && selectedModel !== MUSE_DEFAULT_MODEL ? selectedModel : undefined;
     const models = yield* modelCatalog;
-    const modelId = input.modelSelection.model.trim() || MUSE_DEFAULT_MODEL;
     const reasoningEffort = resolveMuseReasoningEffort(
-      models.find((model) => model.slug === modelId)?.capabilities ??
-        museModelCapabilities(modelId),
-      selectedEffort,
+      models.find((model) => model.slug === modelId)?.capabilities ?? museModelCapabilities(),
+      getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
+        DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
     );
     const jsonSchema = yield* encodeJson(toJsonSchemaObject(input.outputSchema)).pipe(
       Effect.mapError(
@@ -265,7 +256,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
           host,
           cwd,
           `${input.prompt}\n\nReturn only a JSON object matching this schema, with no markdown fences. Do not use tools or ask questions.\n${jsonSchema}`,
-          input.modelSelection,
+          modelId,
           reasoningEffort,
           signal,
         ),
