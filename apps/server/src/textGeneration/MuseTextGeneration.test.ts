@@ -61,16 +61,7 @@ function fixture(
       },
     });
   const host: MuseSdkHost = {
-    initializeResult: {
-      experimentalApi: false,
-      grantedCapabilities: [],
-      museHome: "/fake/muse",
-      platformFamily: "unix",
-      platformOs: "linux",
-      schema: { fingerprint: "test", version: 1 },
-      serverInfo: { name: "muse", version: "1.1.1" },
-      userAgent: "test",
-    },
+    initializeResult: { grantedCapabilities: [] },
     connection: {
       command: vi.fn(async (method, _params, options) => {
         // Connection.command overwrites params.commandId unless supplied in options.

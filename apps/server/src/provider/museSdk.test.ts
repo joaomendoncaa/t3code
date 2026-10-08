@@ -40,7 +40,7 @@ function mockSpawn() {
   vi.mocked(spawnMspConnection).mockReturnValue(handshake);
   const ready = {
     connection: {},
-    initializeResult: { serverInfo: { version: "test" }, schema: { version: 1 } },
+    initializeResult: { grantedCapabilities: [], schema: { version: 1 } },
     exited: shutdown.promise,
     fingerprintWarning: { warning: "additive optional" },
   } as unknown as SpawnedMspConnection;
@@ -143,7 +143,7 @@ describe("Muse SDK host", () => {
     const ready = createMuseSdkHost({ binaryPath: "muse", readOnly: true });
     success.startup.resolve(success.ready);
     const host = await ready;
-    expect(host.initializeResult.serverInfo.version).toBe("test");
+    expect(host.initializeResult.grantedCapabilities).toEqual([]);
     expect(vi.mocked(spawnMspConnection).mock.lastCall?.[0].args).toEqual([
       "serve",
       "--disable-shell",

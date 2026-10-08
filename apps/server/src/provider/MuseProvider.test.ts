@@ -14,16 +14,7 @@ import { checkMuseProviderStatus, makePendingMuseProvider } from "./MuseProvider
 const settings = Schema.decodeSync(MuseSettings);
 const makeHost = (catalog: Record<string, unknown>) => {
   const host: MuseSdkHost = {
-    initializeResult: {
-      experimentalApi: false,
-      grantedCapabilities: [],
-      museHome: "/fake/muse",
-      platformFamily: "unix",
-      platformOs: "linux",
-      schema: { fingerprint: "test", version: 1 },
-      serverInfo: { name: "muse", version: "1.0.3" },
-      userAgent: "test",
-    },
+    initializeResult: { grantedCapabilities: [] },
     connection: {
       request: vi.fn(async () => catalog),
       command: vi.fn(async () => ({})),

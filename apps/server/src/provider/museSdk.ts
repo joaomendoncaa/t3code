@@ -20,7 +20,7 @@ export interface MuseSdkHost {
     | "onProtocolError"
     | "closed"
   >;
-  readonly initializeResult: SpawnedMspConnection["initializeResult"];
+  readonly initializeResult: Pick<SpawnedMspConnection["initializeResult"], "grantedCapabilities">;
   readonly exited: Promise<ProcessExit>;
   /** The last lines Muse wrote to stderr, for explaining an unexpected exit. */
   readonly stderrTail?: () => ReadonlyArray<string>;
@@ -58,12 +58,10 @@ export function museApprovalMode(runtimeMode: RuntimeMode) {
   return runtimeMode === "full-access" ? "allowAll" : "promptUnmatched";
 }
 
-/** One SDK-owned process. The pre-handshake handle owns cleanup even when initialize never replies. */
-export async function createMuseSdkHost(
-  options: MuseSdkHostOptions,
-  spawn: typeof spawnMspConnection = spawnMspConnection,
-): Promise<MuseSdkHost> {
-  options.signal?.throwIfAborted();
+/** The `muse serve` arguments for a host: read-only hosts get no shell, writes, or workspace trust. */
+export function museServeArgs(
+  options: Pick<MuseSdkHostOptions, "readOnly" | "sessionLogging" | "runtimeMode">,
+) {
   const args = ["serve"];
   if (options.readOnly) {
     args.push("--disable-shell", "--disable-write");
@@ -72,9 +70,26 @@ export async function createMuseSdkHost(
     args.push("--trust-workspace");
     if (options.runtimeMode === "full-access") args.push("--disable-sandbox");
   }
+  return args;
+}
+
+/** What T3 sends in MSP `initialize`; only full hosts ask for session MCP servers. */
+export function museInitializeParams(readOnly = false) {
+  return {
+    clientInfo: { name: "t3_code", title: "T3 Code", version: "1" },
+    capabilities: { requestedCapabilities: readOnly ? [] : ["sessionMcp"] },
+  };
+}
+
+/** One SDK-owned process. The pre-handshake handle owns cleanup even when initialize never replies. */
+export async function createMuseSdkHost(
+  options: MuseSdkHostOptions,
+  spawn: typeof spawnMspConnection = spawnMspConnection,
+): Promise<MuseSdkHost> {
+  options.signal?.throwIfAborted();
   const handshake = spawn({
     command: options.binaryPath,
-    args,
+    args: museServeArgs(options),
     ...(options.cwd ? { cwd: options.cwd } : {}),
     // Callers pass an environment already built with makeMuseEnvironment.
     env: options.environment ?? makeMuseEnvironment(),
@@ -103,10 +118,7 @@ export async function createMuseSdkHost(
   timer.unref();
   try {
     const host = await Promise.race([
-      handshake.initialize({
-        clientInfo: { name: "t3_code", title: "T3 Code", version: "1" },
-        capabilities: { requestedCapabilities: options.readOnly ? [] : ["sessionMcp"] },
-      }),
+      handshake.initialize(museInitializeParams(options.readOnly)),
       interrupted,
     ]);
     if (host.initializeResult.schema?.version !== 1) {

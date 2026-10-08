@@ -21,16 +21,7 @@ const host = (catalog: Record<string, unknown>): MuseSdkHost => ({
     onProtocolError: () => {},
     closed: new Promise<void>(() => {}),
   },
-  initializeResult: {
-    experimentalApi: false,
-    grantedCapabilities: [],
-    museHome: "/fake/muse",
-    platformFamily: "unix",
-    platformOs: "linux",
-    schema: { version: 1, fingerprint: "test" },
-    serverInfo: { name: "muse", version: "test" },
-    userAgent: "test",
-  },
+  initializeResult: { grantedCapabilities: [] },
   exited: new Promise(() => {}),
   close: async () => {},
 });

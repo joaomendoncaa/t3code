@@ -52,6 +52,7 @@ import {
   MuseTurnStartResult,
   MuseUserInput,
   museApprovalChoices,
+  museApprovalDecision,
   museApprovalOptions,
   type MuseItem,
 } from "../../provider/museProtocol.ts";
@@ -229,6 +230,8 @@ interface PendingRequest {
   request: OrchestrationV2RuntimeRequest;
   node: OrchestrationV2ExecutionNode;
   item: OrchestrationV2TurnItem;
+  /** What T3 answered, recorded on the request once Muse confirms it. */
+  response?: Pick<OrchestrationV2RuntimeRequest, "decision" | "answers">;
 }
 
 const nativeRef = (nativeId: string) => ({
@@ -510,6 +513,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         const time = yield* DateTime.now;
         entry.request = {
           ...entry.request,
+          ...(status === "resolved" ? entry.response : undefined),
           status,
           resolvedAt: time,
           responseCapability: { type: "not_resumable", reason: "This Muse request has ended." },
@@ -929,7 +933,15 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             const entry = [...pending.values()].find(
               (candidate) => candidate.request.nativeRequestRef?.nativeId === id,
             );
-            if (entry) yield* resolvePending(entry, "resolved");
+            if (entry) {
+              // An approval settled outside T3 still shows Muse's own decision.
+              const native =
+                method === "approval/resolved" && typeof params.decision === "string"
+                  ? museApprovalDecision({ decision: params.decision, scope: "once" })
+                  : undefined;
+              if (!entry.response && native) entry.response = { decision: native };
+              yield* resolvePending(entry, "resolved");
+            }
             if (!pending.size) yield* updateSession("running");
             break;
           }
@@ -1674,6 +1686,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 requirementId: approval.currentRequirementId,
                 choiceId: choice.choiceId,
               });
+              entry.response = { decision: args.decision };
             } else {
               const questionRequest = entry.native.value;
               const answers = [];
@@ -1709,6 +1722,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 userInputId: questionRequest.userInputId,
                 answers,
               });
+              if (args.answers) entry.response = { answers: args.answers };
             }
           }).pipe(
             Effect.mapError(

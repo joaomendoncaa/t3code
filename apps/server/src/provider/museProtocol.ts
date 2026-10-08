@@ -155,7 +155,8 @@ export const MuseDelta = Schema.Struct({
   field: Schema.optional(Schema.String),
 });
 
-function museApprovalDecision(
+/** The T3 decision for one native Muse choice, or none when T3 has no equivalent. */
+export function museApprovalDecision(
   choice: Pick<MuseApproval["availableChoices"][number], "decision" | "scope">,
 ): ProviderApprovalDecision | undefined {
   switch (choice.decision) {
