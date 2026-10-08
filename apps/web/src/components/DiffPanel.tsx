@@ -14,13 +14,15 @@ import {
   Columns2Icon,
   FlaskConicalOffIcon,
   FolderTreeIcon,
+  ListTreeIcon,
   PilcrowIcon,
   Rows3Icon,
   TextWrapIcon,
 } from "lucide-react";
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide";
 import * as Schema from "effect/Schema";
-import { useEffect, useRef, useState } from "react";
+import * as DateTime from "effect/DateTime";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
@@ -49,6 +51,7 @@ import {
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
+  resolveFileDiffPreviousPath,
 } from "../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
@@ -103,6 +106,7 @@ import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
 import { DiffFileLoadingBoundary } from "./diffs/DiffFileLoadingBoundary";
 import { DiffFileStatus } from "./diffs/DiffFileStatus";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
+import DifferTreeView, { type DifferFileStatus } from "./differ/DifferTreeView";
 
 type DiffThemeType = "light" | "dark";
 const AUTOMATIC_BASE_REF = "__automatic_base_ref__";
@@ -126,6 +130,22 @@ function getCachedFileEntry(fileDiff: FileDiffMetadata) {
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 
+/** Pierre change type -> differ tree status. Unknown kinds read as modified. */
+function differFileStatusForType(type: string): DifferFileStatus {
+  switch (type) {
+    case "new":
+      return "Added";
+    case "deleted":
+      return "Deleted";
+    case "rename-pure":
+    case "rename-changed":
+      return "Renamed";
+    default:
+      return "Modified";
+  }
+}
+
+/** Collapse control for one file header; re-renders only when its own file changes. */
 function DiffFileCollapseToggle({
   filePath,
   fileKey,
@@ -216,6 +236,10 @@ export default function DiffPanel({
   const diffLayout = settings.diffLayout;
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
+  // Differ canvas tree (see ./differ/DifferTreeView): same diff surface, same
+  // selection — only the presentation changes. Local state for now; persist
+  // with the other diff preferences once the symbol service lands.
+  const [differTreeView, setDifferTreeView] = useState(false);
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
     DIFF_FILE_TREE_STORAGE_KEY,
     false,
@@ -595,6 +619,19 @@ export default function DiffPanel({
   const diffLineStat = sourceLineStat ?? getDiffLineStat(renderableFiles);
   const fileTreeEntries = diffFileTreeEntries(renderableFiles.filter(isFileShown));
   const codeViewReveal = useCodeViewFileReveal();
+  // Differ canvas tree input: same files the list view renders, mapped onto
+  // the differ row builder's file contract (no symbols yet — file-level tree
+  // until the symbol-enrichment service lands).
+  const differFileEntries = useMemo(
+    () =>
+      renderableFileEntries.map(({ fileDiff, fileKey }) => ({
+        key: fileKey,
+        path: resolveFileDiffPath(fileDiff),
+        prevPath: resolveFileDiffPreviousPath(fileDiff),
+        status: differFileStatusForType(fileDiff.type),
+      })),
+    [renderableFileEntries],
+  );
   const revealDiffFile = (filePath: string) => {
     const index = renderableFileEntries.findIndex(
       (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
@@ -1049,6 +1086,26 @@ export default function DiffPanel({
             </TooltipPopup>
           </Tooltip>
         )}
+        {diffFileKeys.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  aria-label={differTreeView ? "Show file list view" : "Show differ tree view"}
+                  variant="ghost"
+                  size="sm"
+                  pressed={differTreeView}
+                  onPressedChange={(pressed) => setDifferTreeView(Boolean(pressed))}
+                />
+              }
+            >
+              <ListTreeIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {differTreeView ? "Show file list view" : "Show differ tree view"}
+            </TooltipPopup>
+          </Tooltip>
+        )}
       </div>
     </>
   );
@@ -1136,6 +1193,14 @@ export default function DiffPanel({
                   </p>
                 </div>
               )
+            ) : differTreeView && codeViewFiles.length > 0 ? (
+              <DifferTreeView
+                entries={differFileEntries}
+                scopeLabel={selectedScopeLabel}
+                baseLabel={selectedGitSource?.baseRef ?? null}
+                headLabel={selectedGitSource?.headRef ?? null}
+                onOpenFile={openDiffFile}
+              />
             ) : lazySource || renderablePatch?.kind === "files" ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 <div
