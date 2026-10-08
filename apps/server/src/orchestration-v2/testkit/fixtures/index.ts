@@ -58,6 +58,8 @@ import { messageSteeringInput } from "./message_steering/input.ts";
 import { assertPiMessageSteeringOutput } from "./message_steering/pi_output.ts";
 import { MUSE_PERMISSION_DECLINED_FILE, musePermissionInput } from "./muse_permission/input.ts";
 import { assertMusePermissionOutput } from "./muse_permission/output.ts";
+import { museWorkflowInput } from "./muse_workflow/input.ts";
+import { assertMuseWorkflowOutput } from "./muse_workflow/output.ts";
 import { assertMuseMultiTurnOutput } from "./multi_turn/muse_output.ts";
 import { assertMuseTurnInterruptOutput } from "./turn_interrupt/muse_output.ts";
 import { piCompactionInput } from "./pi_compaction/input.ts";
@@ -1222,6 +1224,19 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: MUSE_MODEL_SELECTION,
         expectedAbsentWorkspacePaths: [MUSE_PERMISSION_DECLINED_FILE],
         assertOutput: assertMusePermissionOutput,
+      },
+    ],
+  },
+  {
+    name: "muse_workflow",
+    buildInput: museWorkflowInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("muse"),
+        transcriptFile: new URL("./muse_workflow/muse_transcript.ndjson", import.meta.url),
+        modelSelection: MUSE_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertMuseWorkflowOutput,
       },
     ],
   },

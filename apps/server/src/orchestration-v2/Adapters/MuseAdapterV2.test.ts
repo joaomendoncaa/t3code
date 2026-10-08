@@ -505,20 +505,6 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("stops a turn Muse starts on its own and stays usable", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakeMuse();
-      const harness = yield* makeHarness(fake);
-      yield* fake.emit("turn/started", { turnId: "goal-turn" });
-      const interrupt = yield* fake.takeCall("turn/interrupt");
-      assert.strictEqual(interrupt.params.turnId, "goal-turn");
-      const { nativeId } = yield* startConversation(harness, fake);
-      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
-      const terminal = yield* harness.takeEvent("turn.terminal");
-      assert.strictEqual(terminal.status, "completed");
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
   it.effect("skips an unreadable usage notification without ending the turn", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
@@ -743,6 +729,38 @@ describe("MuseAdapterV2", () => {
         .respondToRuntimeRequest({ requestId: first.runtimeRequest.id, decision: "accept" })
         .pipe(Effect.exit);
       assert.strictEqual(repeated._tag, "Failure");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps the user's decision when Muse settles before acknowledging it", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const { nativeId } = yield* startConversation(harness, fake);
+      yield* fake.emit("approval/requested", approval(nativeId));
+      const pending = yield* harness.takeEvent(
+        "runtime_request.updated",
+        (event) => event.runtimeRequest.status === "pending",
+      );
+      const acknowledgement = pendingPromise<Record<string, unknown>>();
+      fake.queueResponse("approval/decide", acknowledgement.promise);
+      const responding = yield* harness.runtime
+        .respondToRuntimeRequest({ requestId: pending.runtimeRequest.id, decision: "decline" })
+        .pipe(Effect.forkScoped);
+      yield* fake.takeCall("approval/decide");
+      // Muse's native decision for this choice maps to decline too; "cancel" proves it was ours.
+      yield* fake.emit("approval/resolved", {
+        approvalId: "approval-1",
+        turnId: nativeId,
+        decision: "abort",
+      });
+      const resolved = yield* harness.takeEvent(
+        "runtime_request.updated",
+        (event) => event.runtimeRequest.status === "resolved",
+      );
+      assert.strictEqual(resolved.runtimeRequest.decision, "decline");
+      acknowledgement.resolve({});
+      yield* Fiber.join(responding);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

@@ -237,6 +237,8 @@ const record = Effect.gen(function* () {
     driver: variant.driver,
     modelSelection: variant.modelSelection,
   }).pipe(Effect.provide(IdAllocator.layer));
+  const continuationOptions =
+    variant.runContinuationWorker === true ? { runContinuationWorker: true } : {};
 
   yield* Effect.gen(function* () {
     yield* followWallClock.pipe(Effect.forkScoped);
@@ -260,6 +262,7 @@ const record = Effect.gen(function* () {
             environment: makeMuseEnvironment(),
           }),
       },
+      continuationOptions,
     );
   }).pipe(Effect.scoped, provideDeterministicTestRuntime);
 
@@ -288,6 +291,7 @@ const record = Effect.gen(function* () {
         runtimePolicyOverride: { ...variant.runtimePolicyOverride, cwd: replayWorkspace },
       },
       MuseOrchestratorReplayHarness,
+      continuationOptions,
     );
     variant.assertOutput(replayResult, transcript);
   }).pipe(Effect.scoped, provideDeterministicTestRuntime);

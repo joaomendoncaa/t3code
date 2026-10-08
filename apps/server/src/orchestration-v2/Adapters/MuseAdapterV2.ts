@@ -91,6 +91,8 @@ import {
   type ProviderAdapterV2TurnInput,
   type ProviderAdapterV2TurnMessage,
 } from "../ProviderAdapter.ts";
+import { backgroundWorkNotification, type BackgroundWorkReport } from "../Notification.ts";
+import type * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
 import { museItemStatus, museToolPresentation } from "./MuseItemPresentation.ts";
@@ -204,6 +206,12 @@ export interface MuseAdapterV2Options {
   readonly createHost?: typeof createMuseSdkHost;
   readonly requestTimeoutMs?: number;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /** Where a turn Muse starts on its own (a finished workflow's report) asks for its run. */
+  readonly continuationRequests?: {
+    readonly offer: (
+      request: ProviderContinuationRequests.ProviderContinuationRequest,
+    ) => Effect.Effect<void>;
+  };
 }
 
 interface ActiveTurn {
@@ -320,7 +328,14 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       });
       const pending = new Map<RuntimeRequestId, PendingRequest>();
       const seenTerminals = new Set<string>();
+      // Workflows and subagents that outlive their turn, by item id, with the turn that owns them.
       const observedChildren = new Map<string, ActiveTurn>();
+      // Background work that finished since the last turn, reported to the turn Muse starts for it.
+      const finishedBackground: Array<BackgroundWorkReport> = [];
+      // A turn Muse started on its own, held until the continuation run T3 opens for it takes it.
+      let wake:
+        | { readonly nativeId: string; readonly events: Array<[string, unknown]> }
+        | undefined;
       const emit = (event: ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
       const decode = <A, I>(schema: Schema.Codec<A, I>, data: unknown) =>
@@ -413,6 +428,23 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           updatedAt: time,
         };
       };
+      /** Lists running workflows and subagents on the thread, so it shows it still waits on them. */
+      const syncBackground = Effect.fnUntraced(function* () {
+        yield* updateThread({
+          pendingBackgroundTasks: [...observedChildren].flatMap(([itemId, owner]) => {
+            const item = owner.items.get(itemId);
+            const description = item?.objective ?? item?.entryId ?? item?.fallbackText;
+            return [
+              {
+                taskId: itemId,
+                kind:
+                  item?.kind === "subagent" ? ("subagent" as const) : ("background_task" as const),
+                ...(description ? { description } : {}),
+              },
+            ];
+          }),
+        });
+      });
       const publishItem = Effect.fnUntraced(function* (
         turn: ActiveTurn,
         item: MuseItem,
@@ -423,9 +455,21 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         if (item.kind === "toolCall" && item.tool && TOOLS_WITH_NATIVE_ROWS.has(item.tool)) return;
         const time = yield* DateTime.now;
         const status = terminal ?? museItemStatus(item);
-        if (item.kind === "subagent") {
+        if (item.kind === "subagent" || item.kind === "workflow") {
+          const wasRunning = observedChildren.has(item.itemId);
           if (status === "running") observedChildren.set(item.itemId, turn);
-          else observedChildren.delete(item.itemId);
+          else if (observedChildren.delete(item.itemId) && active !== turn)
+            finishedBackground.push({
+              kind: item.kind === "subagent" ? "subagent" : "background_task",
+              label: item.objective ?? item.entryId ?? item.fallbackText,
+              outcome:
+                status === "completed"
+                  ? "completed"
+                  : status === "cancelled"
+                    ? "cancelled"
+                    : "failed",
+            });
+          if (wasRunning !== observedChildren.has(item.itemId)) yield* syncBackground();
         }
         const streaming = status === "running";
         const base = {
@@ -505,6 +549,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           if (item) yield* publishItem(owner, item, status);
         }
         observedChildren.clear();
+        if (thread?.pendingBackgroundTasks?.length) yield* syncBackground();
       });
       const resolvePending = Effect.fnUntraced(function* (
         entry: PendingRequest,
@@ -550,7 +595,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         const completedAt = yield* DateTime.now;
         for (const item of turn.items.values()) {
           if (
-            item.kind === "subagent" &&
+            (item.kind === "subagent" || item.kind === "workflow") &&
             item.status === "inProgress" &&
             disposition === "reusable"
           )
@@ -801,17 +846,30 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             return;
           }
         }
-        const turn = active;
-        if (!turn) {
-          // Muse can start turns on its own (for example goal follow-ups). T3 has no
-          // run to show them in, so stop them instead of letting them work unseen.
-          if (method === "turn/started" && typeof params.turnId === "string")
-            yield* request("turn/interrupt", { turnId: params.turnId }).pipe(
-              Effect.ignore,
-              Effect.forkIn(scope),
-            );
-          return;
+        // Muse starts a turn on its own when a workflow finishes, to report its result.
+        // Hold it and ask the orchestrator for a run; that run takes the held events.
+        if (method === "turn/started" && typeof params.turnId === "string" && !active && !wake) {
+          wake = { nativeId: params.turnId, events: [] };
+          const reports = finishedBackground.splice(0);
+          const notification = backgroundWorkNotification(reports);
+          if (thread?.appThreadId && options.continuationRequests)
+            yield* options.continuationRequests.offer({
+              threadId: thread.appThreadId,
+              providerThreadId: thread.id,
+              driver: MUSE_PROVIDER,
+              detail: null,
+              ...(notification ? { notification } : {}),
+            });
         }
+        if (wake && active?.nativeId !== wake.nativeId) {
+          const turnId = typeof params.turnId === "string" ? params.turnId : itemEvent?.turnId;
+          if (turnId === wake.nativeId) {
+            wake.events.push([method, data]);
+            return;
+          }
+        }
+        const turn = active;
+        if (!turn) return;
         if (typeof params.turnId === "string" && params.turnId !== turn.nativeId && !turn.compact)
           return;
         switch (method) {
@@ -1369,11 +1427,11 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         if (selection.instanceId !== options.instanceId)
           return yield* protocolError("Model selection belongs to another Muse instance");
         const catalog = options.modelCatalog ? yield* options.modelCatalog : [];
+        const model = yield* resolveModel(selection);
         const selected = getModelSelectionStringOptionValue(selection, "reasoningEffort");
         // With no saved choice, the model's own default applies.
         return resolveMuseReasoningEffort(
-          catalog.find((model) => model.slug === selection.model)?.capabilities ??
-            museModelCapabilities(),
+          catalog.find((entry) => entry.slug === model)?.capabilities ?? museModelCapabilities(),
           selected,
         );
       });
@@ -1391,16 +1449,23 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           return yield* protocolError("Muse does not support dedicated Plan mode");
         if (turnInput.runtimePolicy.runtimeMode !== input.runtimePolicy.runtimeMode)
           return yield* protocolError("Runtime policy changes require a fresh Muse host");
-        const effort = yield* selectionEffort(turnInput.modelSelection);
-        const parts = compact ? [] : yield* prompt(turnInput.message);
-        const targetModel = yield* resolveModel(turnInput.modelSelection);
+        // A continuation run takes the turn Muse already started; it sends no prompt.
+        const continuation =
+          turnInput.message.createdBy === "agent" &&
+          turnInput.message.creationSource === "provider";
+        const adopted = continuation ? wake : undefined;
+        const effort = continuation ? undefined : yield* selectionEffort(turnInput.modelSelection);
+        const parts = compact || continuation ? [] : yield* prompt(turnInput.message);
+        const targetModel = continuation
+          ? undefined
+          : yield* resolveModel(turnInput.modelSelection);
         if (targetModel && session.model !== targetModel) {
           yield* request("session/setModel", {
             model: { modelId: targetModel, providerId: "meta" },
           });
           session = { ...session, model: targetModel };
         }
-        const nativeId = host.connection.mintCommandId();
+        const nativeId = adopted?.nativeId ?? host.connection.mintCommandId();
         const startedAt = yield* DateTime.now;
         const providerTurn: OrchestrationV2ProviderTurn = {
           id: idAllocator.derive.providerTurn({
@@ -1448,7 +1513,15 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             lastRunOrdinal: turnInput.runOrdinal,
           });
           yield* updateSession("running");
+          if (continuation) {
+            wake = undefined;
+            // Its turn may have ended already; then the held turn/completed ends this run.
+            if (!adopted) return yield* finish(turn, "completed");
+            for (const [method, data] of adopted.events)
+              yield* handleNotification(method, data).pipe(Effect.catch(failHost));
+          }
         }).pipe(eventPermit.withPermits(1));
+        if (continuation) return;
         yield* Effect.gen(function* () {
           if (compact) {
             const result = yield* request("session/compact", {}, true, nativeId).pipe(
@@ -1553,6 +1626,10 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         providerSessionId: input.providerSessionId,
         providerSession: session,
         events: Stream.fromQueue(events),
+        // A running workflow or a held Muse turn keeps the host: idle release must wait.
+        hasPendingBackgroundWork: Effect.sync(
+          () => observedChildren.size > 0 || wake !== undefined,
+        ),
         ensureThread: (args) =>
           register(args).pipe(
             commands.withPermits(1),
@@ -1681,12 +1758,13 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
               const approval = entry.native.value;
               const choice = args.decision && museApprovalChoices(approval).get(args.decision);
               if (!choice) return yield* protocolError("Muse did not offer this approval decision");
+              // Recorded first: Muse can settle the approval before it acknowledges the command.
+              entry.response = { decision: args.decision };
               yield* request("approval/decide", {
                 approvalId: approval.approvalId,
                 requirementId: approval.currentRequirementId,
                 choiceId: choice.choiceId,
-              });
-              entry.response = { decision: args.decision };
+              }).pipe(Effect.tapError(() => Effect.sync(() => delete entry.response)));
             } else {
               const questionRequest = entry.native.value;
               const answers = [];
@@ -1718,11 +1796,11 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                   ...(freeText ? (selected.length ? { note: freeText } : { freeText }) : {}),
                 });
               }
+              if (args.answers) entry.response = { answers: args.answers };
               yield* request("userInput/answer", {
                 userInputId: questionRequest.userInputId,
                 answers,
-              });
-              if (args.answers) entry.response = { answers: args.answers };
+              }).pipe(Effect.tapError(() => Effect.sync(() => delete entry.response)));
             }
           }).pipe(
             Effect.mapError(

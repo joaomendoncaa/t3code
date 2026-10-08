@@ -13,6 +13,8 @@ const MuseUsage = Schema.Struct({
 });
 
 export const MuseItem = Schema.Struct({
+  /** `workflow`: the launched entry's name. */
+  entryId: Schema.optional(Schema.String),
   itemId: NonEmptyString,
   kind: NonEmptyString,
   revision: Schema.Int.check(Schema.isGreaterThan(0)),

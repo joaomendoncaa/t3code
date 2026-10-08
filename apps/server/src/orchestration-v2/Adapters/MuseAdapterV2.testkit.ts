@@ -37,6 +37,7 @@ import {
 } from "../../provider/museSdk.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
+import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import {
   makeReplayServerConfig,
   type OrchestratorV2ProviderReplayHarness,
@@ -462,6 +463,8 @@ export function layer(input: {
           serverConfig: yield* ServerConfig.ServerConfig,
           fileSystem: yield* FileSystem.FileSystem,
           createHost: input.createHost,
+          // Same queue the continuation worker drains when the fixture runs it.
+          continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
         }),
       ];
     }),

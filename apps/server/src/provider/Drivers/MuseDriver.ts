@@ -15,6 +15,7 @@ import { makeMuseTextGeneration } from "../../textGeneration/MuseTextGeneration.
 import { ProviderDriverError } from "../Errors.ts";
 import { makeMuseAdapterV2 } from "../../orchestration-v2/Adapters/MuseAdapterV2.ts";
 import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import * as ProviderContinuationRequests from "../../orchestration-v2/ProviderContinuationRequests.ts";
 import { checkMuseProviderStatus, makePendingMuseProvider } from "../MuseProvider.ts";
 import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
@@ -67,6 +68,7 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const { cwd } = serverConfig;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
       const hostEnvironment = yield* HostProcessEnvironment;
       // Drop an inherited META_API_KEY so Muse uses its login; an instance value still wins.
       const processEnvironment = mergeProviderInstanceEnvironment(
@@ -159,6 +161,7 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
         fileSystem,
         modelCatalog,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        continuationRequests,
       });
       const textGeneration = yield* makeMuseTextGeneration(effectiveConfig, {
         environment: processEnvironment,
