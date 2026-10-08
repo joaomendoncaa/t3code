@@ -397,6 +397,7 @@ describe("MuseAdapterV2", () => {
           mcpServers: {
             "t3-code": {
               transport: "streamableHttp",
+              mode: "optional",
               url: "http://127.0.0.1:43210/mcp",
               headers: { Authorization: "Bearer thread-scoped-test-token" },
             },

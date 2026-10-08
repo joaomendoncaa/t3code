@@ -186,7 +186,10 @@ function museApprovalDecision(
   }
 }
 
-/** The shared decision protocol exposes one native choice per canonical action. */
+/**
+ * Maps each canonical decision to one native choice. Muse shell approvals offer
+ * no `denied` choice, only `abort` ("Reject"), so `decline` falls back to it.
+ */
 export function museApprovalChoices(approval: Pick<MuseApproval, "availableChoices">) {
   const choices = new Map<ProviderApprovalDecision, MuseApproval["availableChoices"][number]>();
   const rank = (choice: MuseApproval["availableChoices"][number]) =>
@@ -198,5 +201,16 @@ export function museApprovalChoices(approval: Pick<MuseApproval, "availableChoic
     const previous = choices.get(decision);
     if (!previous || rank(choice) < rank(previous)) choices.set(decision, choice);
   }
+  const abort = choices.get("cancel");
+  if (!choices.has("decline") && abort) choices.set("decline", abort);
   return choices;
+}
+
+/** The approval buttons to show: one per native choice, preferring `decline` over `cancel`. */
+export function museApprovalOptions(approval: Pick<MuseApproval, "availableChoices">) {
+  const choices = museApprovalChoices(approval);
+  const declineChoiceId = choices.get("decline")?.choiceId;
+  return [...choices]
+    .filter(([decision, choice]) => decision !== "cancel" || choice.choiceId !== declineChoiceId)
+    .map(([decision, choice]) => ({ decision, label: choice.label }));
 }

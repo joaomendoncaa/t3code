@@ -53,6 +53,7 @@ import {
   MuseUserInput,
   MuseViewPage,
   museApprovalChoices,
+  museApprovalOptions,
   type MuseItem,
 } from "../../provider/museProtocol.ts";
 import {
@@ -745,10 +746,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                   native.value.subject.path ??
                   native.value.toolName ??
                   "Muse requests permission",
-                options: [...museApprovalChoices(native.value)].map(([decision, choice]) => ({
-                  decision,
-                  label: choice.label,
-                })),
+                options: museApprovalOptions(native.value),
               }
             : {
                 ...base,
@@ -1287,8 +1285,11 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           const config = mcpSession
             ? {
                 mcpServers: {
+                  // Muse defaults to "required", which fails the whole run when T3's
+                  // tools cannot be reached. The agent should still work without them.
                   "t3-code": {
                     transport: "streamableHttp",
+                    mode: "optional",
                     url: mcpSession.endpoint,
                     headers: { Authorization: mcpSession.authorizationHeader },
                   },
