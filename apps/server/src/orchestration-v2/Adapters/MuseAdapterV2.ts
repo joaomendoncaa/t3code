@@ -24,7 +24,6 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -204,7 +203,6 @@ export interface MuseAdapterV2Options {
   readonly createHost?: typeof createMuseSdkHost;
   readonly requestTimeoutMs?: number;
   readonly nativeEventLogger?: EventNdjsonLogger;
-  readonly path: Path.Path;
 }
 
 interface ActiveTurn {
@@ -216,7 +214,6 @@ interface ActiveTurn {
   readonly started: Map<string, DateTime.Utc>;
   readonly dirty: Set<string>;
   readonly settledRequests: Set<string>;
-  readonly autoApprovals: Set<string>;
   readonly done: Deferred.Deferred<void>;
   todoPlanId?: PlanId;
   nextOrdinal: number;
@@ -240,11 +237,6 @@ const nativeRef = (nativeId: string) => ({
   strength: "strong" as const,
 });
 const recordSchema = Schema.Record(Schema.String, Schema.Unknown);
-const MuseModelDefaults = Schema.Struct({
-  models: Schema.Array(
-    Schema.Struct({ modelId: Schema.String, isDefault: Schema.optional(Schema.Boolean) }),
-  ),
-});
 // Notifications that only add detail. A malformed one is skipped instead of ending the session.
 const INFORMATIONAL_NOTIFICATIONS = new Set([
   "session/contextUsage",
@@ -254,12 +246,6 @@ const INFORMATIONAL_NOTIFICATIONS = new Set([
 ]);
 // Tools whose results already show as T3's own todo list and question rows.
 const TOOLS_WITH_NATIVE_ROWS = new Set(["write_todos", "request_user_input"]);
-// `approval/decide` errors meaning the approval was already settled elsewhere.
-const SETTLED_APPROVAL_ERRORS = new Set([
-  "approvalAlreadyResolved",
-  "approvalRequirementStale",
-  "approvalNotFound",
-]);
 const responseAnswerSchema = Schema.Union([Schema.String, Schema.Array(Schema.String)]);
 
 /** One scoped Muse host owns one native session; the orchestrator owns app runs and queuing. */
@@ -322,8 +308,13 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       let active: ActiveTurn | undefined;
       // The last finished turn, so context usage reported after it still lands on it.
       let lastProviderTurn: OrchestrationV2ProviderTurn | undefined;
-      // Whether the session runs a model T3 chose rather than the account default.
-      let switchedModel = false;
+      // "default" is the catalog's default model, from the provider snapshot. Without
+      // one, Muse keeps whatever model the session already runs.
+      const resolveModel = Effect.fnUntraced(function* (selection: ModelSelection) {
+        if (selection.model !== MUSE_DEFAULT_MODEL) return selection.model;
+        const catalog = options.modelCatalog ? yield* options.modelCatalog : [];
+        return catalog.find((model) => model.isDefault && !model.isCustom)?.slug;
+      });
       const pending = new Map<RuntimeRequestId, PendingRequest>();
       const seenTerminals = new Set<string>();
       const observedChildren = new Map<string, ActiveTurn>();
@@ -661,49 +652,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             entry.native.type === native.type &&
             entry.request.nativeRequestRef?.nativeId === nativeId,
         );
-        if (native.type === "approval") {
-          const approval = native.value;
-          const relativePath = approval.subject.path?.trim()
-            ? options.path.relative(
-                options.path.resolve(cwd),
-                options.path.resolve(cwd, approval.subject.path),
-              )
-            : undefined;
-          const accept = museApprovalChoices(approval).get("accept");
-          if (
-            input.runtimePolicy.runtimeMode === "auto-accept-edits" &&
-            approval.protectedWrite === false &&
-            approval.judgeEscalated === false &&
-            relativePath !== undefined &&
-            relativePath !== "" &&
-            relativePath !== ".." &&
-            !relativePath.startsWith(`..${options.path.sep}`) &&
-            !options.path.isAbsolute(relativePath) &&
-            approval.subject.kind === "fileAccess" &&
-            (approval.subject.access === "write" || approval.subject.access === "readWrite") &&
-            accept?.scope === "once"
-          ) {
-            const key = `${nativeId}:${approval.currentRequirementId.sourceIndex}`;
-            if (!turn.autoApprovals.has(key)) {
-              turn.autoApprovals.add(key);
-              // Run outside the notification permit: timeout cleanup acquires it.
-              yield* request("approval/decide", {
-                approvalId: nativeId,
-                requirementId: approval.currentRequirementId,
-                choiceId: accept.choiceId,
-              }).pipe(
-                Effect.catch((cause) =>
-                  cause.payload instanceof MspError &&
-                  SETTLED_APPROVAL_ERRORS.has(cause.payload.kind)
-                    ? Effect.void
-                    : Queue.offer(inbox, { type: "failure", cause, epoch: hostEpoch }),
-                ),
-                Effect.forkIn(scope),
-              );
-            }
-            return;
-          }
-        }
         const requestId =
           previous?.request.id ??
           (yield* idAllocator.allocate
@@ -956,7 +904,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           case "approval/updated":
             if (
               method === "approval/updated" &&
-              ![...turn.autoApprovals].some((key) => key.startsWith(`${params.approvalId}:`)) &&
               ![...pending.values()].some(
                 (entry) =>
                   entry.native.type === "approval" &&
@@ -1296,6 +1243,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
                 },
               }
             : undefined;
+          const startModel = yield* resolveModel(args.modelSelection);
           const result = yield* request(
             requestedId ? "session/resume" : "session/start",
             requestedId
@@ -1304,10 +1252,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
               : {
                   workspaceRoot: cwd,
                   ...(config ? { config } : {}),
-                  // The "default" sentinel lets Muse pick the account's default model.
-                  ...(args.modelSelection.model === MUSE_DEFAULT_MODEL
-                    ? {}
-                    : { modelId: args.modelSelection.model }),
+                  ...(startModel ? { modelId: startModel } : {}),
                   providerId: "meta",
                   approvalMode: museApprovalMode(args.runtimePolicy.runtimeMode),
                 },
@@ -1363,7 +1308,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             ...session,
             model: result.session.modelId ?? args.modelSelection.model,
           };
-          switchedModel = args.modelSelection.model !== MUSE_DEFAULT_MODEL;
           yield* emit({
             type: "provider_thread.updated",
             driver: MUSE_PROVIDER,
@@ -1437,29 +1381,13 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           return yield* protocolError("Runtime policy changes require a fresh Muse host");
         const effort = yield* selectionEffort(turnInput.modelSelection);
         const parts = compact ? [] : yield* prompt(turnInput.message);
-        // "default" means the account's default model. After T3 switched this session
-        // to another model, switch back to Muse's default instead of keeping it.
-        const targetModel =
-          turnInput.modelSelection.model !== MUSE_DEFAULT_MODEL
-            ? turnInput.modelSelection.model
-            : switchedModel
-              ? yield* request("model/list", {}, false).pipe(
-                  Effect.flatMap((value) => decode(MuseModelDefaults, value)),
-                  Effect.flatMap(({ models }) => {
-                    const fallback = models.find((model) => model.isDefault)?.modelId;
-                    return fallback
-                      ? Effect.succeed(fallback)
-                      : protocolError("Muse did not report a default model; pick a model");
-                  }),
-                )
-              : undefined;
+        const targetModel = yield* resolveModel(turnInput.modelSelection);
         if (targetModel && session.model !== targetModel) {
           yield* request("session/setModel", {
             model: { modelId: targetModel, providerId: "meta" },
           });
           session = { ...session, model: targetModel };
         }
-        switchedModel = turnInput.modelSelection.model !== MUSE_DEFAULT_MODEL;
         const nativeId = host.connection.mintCommandId();
         const startedAt = yield* DateTime.now;
         const providerTurn: OrchestrationV2ProviderTurn = {
@@ -1487,7 +1415,6 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           started: new Map(),
           dirty: new Set(),
           settledRequests: new Set(),
-          autoApprovals: new Set(),
           done: yield* Deferred.make<void>(),
           nextOrdinal: turnInput.providerTurnOrdinal * 100 + 1,
           flushScheduled: false,

@@ -33,8 +33,13 @@ function comparableMuseVersion(version: string): string {
   return version.replace(/-R(\d+)(?:\.(\d+))?$/, "-release.$1.$2").replace(/\.$/, ".0");
 }
 
+const MUSE_REVISION = /-R\d+(?:\.\d+)?$/;
+
+/** A version printed without a revision is compared by its release alone. */
 export const compareMuseVersions = (current: string, latest: string) =>
-  compareSemverVersions(comparableMuseVersion(current), comparableMuseVersion(latest));
+  MUSE_REVISION.test(current) === MUSE_REVISION.test(latest)
+    ? compareSemverVersions(comparableMuseVersion(current), comparableMuseVersion(latest))
+    : compareSemverVersions(current.replace(MUSE_REVISION, ""), latest.replace(MUSE_REVISION, ""));
 
 /** Only the official launcher owns an update channel; a standalone binary cannot update itself. */
 export const museMaintenance: ProviderMaintenanceCapabilitiesResolver = {

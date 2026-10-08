@@ -157,7 +157,6 @@ export const MuseDriver: ProviderDriver<MuseSettings, MuseDriverEnv> = {
         idAllocator,
         serverConfig,
         fileSystem,
-        path,
         modelCatalog,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });

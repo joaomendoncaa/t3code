@@ -26,7 +26,6 @@ import type * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -202,7 +201,7 @@ const makeHarness = Effect.fnUntraced(function* (
   replacement?: Effect.Success<ReturnType<typeof makeFakeMuse>>,
   existingProviderThread?: OrchestrationV2ProviderThread,
   policy = runtimePolicy,
-  overrides: Pick<MuseAdapterV2Options, "createHost" | "nativeEventLogger"> = {},
+  overrides: Pick<MuseAdapterV2Options, "createHost" | "nativeEventLogger" | "modelCatalog"> = {},
 ) {
   let hostCount = 0;
   const adapter = makeMuseAdapterV2({
@@ -212,7 +211,6 @@ const makeHarness = Effect.fnUntraced(function* (
     idAllocator: yield* IdAllocator.IdAllocatorV2,
     serverConfig: yield* ServerConfig.ServerConfig,
     fileSystem: yield* FileSystem.FileSystem,
-    path: yield* Path.Path,
     createHost: async () => (hostCount++ === 0 ? fake.host : (replacement ?? fake).host),
     ...overrides,
   });
@@ -462,7 +460,6 @@ describe("MuseAdapterV2", () => {
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           serverConfig: yield* ServerConfig.ServerConfig,
           fileSystem: yield* FileSystem.FileSystem,
-          path: yield* Path.Path,
           createHost: async () => fake.host,
         });
         const runtime = yield* adapter.openSession({
@@ -622,16 +619,30 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("switches back to Muse's default model when the default follows another model", () =>
+  it.effect("moves a resumed session on another model back to the catalog default", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
-      const harness = yield* makeHarness(fake);
-      fake.queueResponse("model/list", {
-        models: [
-          { modelId: "account-default", isDefault: true },
-          { modelId: MODEL, isDefault: false },
-        ],
-      });
+      // The saved session last ran MODEL; the catalog's default is another model.
+      const harness = yield* makeHarness(
+        fake,
+        INSTANCE_ID,
+        "saved-session",
+        undefined,
+        undefined,
+        runtimePolicy,
+        {
+          modelCatalog: Effect.succeed([
+            {
+              slug: "account-default",
+              name: "Default",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+            { slug: MODEL, name: "Other", isCustom: false, isDefault: false, capabilities: null },
+          ]),
+        },
+      );
       const input = yield* turnInput(harness.providerThread, 1);
       const selection = { ...input.modelSelection, model: MUSE_DEFAULT_MODEL };
       yield* harness.runtime.startTurn({
@@ -1034,120 +1045,6 @@ describe("MuseAdapterV2", () => {
         2,
       );
       assert.isFalse(requests.some((event) => event.runtimeRequest.status === "cancelled"));
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect(
-    "automatically accepts only unprotected in-workspace edits in the edit permission mode",
-    () =>
-      Effect.gen(function* () {
-        const fake = yield* makeFakeMuse();
-        const policy = ProviderAdapterV2RuntimePolicy.make({
-          ...runtimePolicy,
-          runtimeMode: "auto-accept-edits",
-          cwd: "/workspace",
-        });
-        const harness = yield* makeHarness(
-          fake,
-          INSTANCE_ID,
-          undefined,
-          undefined,
-          undefined,
-          policy,
-        );
-        const { nativeId } = yield* startConversation(harness, fake);
-        const edit = {
-          ...approval(nativeId),
-          protectedWrite: false,
-          judgeEscalated: false,
-          subject: { kind: "fileAccess", access: "write", path: "src/result.ts" },
-        };
-        yield* fake.emit("approval/requested", edit);
-        const accepted = yield* fake.takeCall("approval/decide");
-        assert.strictEqual(accepted.params.choiceId, "once");
-        yield* fake.emit("approval/resolved", { approvalId: edit.approvalId, turnId: nativeId });
-        yield* fake.emit("approval/updated", edit);
-        for (const [approvalId, detail] of [
-          ["protected", { protectedWrite: true }],
-          ["outside", { subject: { kind: "fileAccess", access: "write", path: "../outside.ts" } }],
-          ["escalated", { judgeEscalated: true }],
-        ] as const) {
-          yield* fake.emit("approval/requested", {
-            ...edit,
-            ...detail,
-            approvalId,
-            currentRequirementId: { approvalId, sourceIndex: 0 },
-          });
-          const pending = yield* harness.takeEvent(
-            "runtime_request.updated",
-            (event) => event.runtimeRequest.status === "pending",
-          );
-          assert.strictEqual(pending.runtimeRequest.nativeRequestRef?.nativeId, approvalId);
-        }
-        assert.strictEqual(
-          fake.calls.filter((call) => call.method === "approval/decide").length,
-          1,
-        );
-        assert.strictEqual(
-          harness.allEvents.filter(
-            (event) =>
-              event.type === "runtime_request.updated" &&
-              event.runtimeRequest.nativeRequestRef?.nativeId === edit.approvalId,
-          ).length,
-          0,
-        );
-      }).pipe(Effect.scoped, Effect.provide(testLayer)),
-  );
-
-  it.effect("surfaces a protected requirement that follows an automatic edit approval", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakeMuse();
-      const policy = ProviderAdapterV2RuntimePolicy.make({
-        ...runtimePolicy,
-        runtimeMode: "auto-accept-edits",
-        cwd: "/workspace",
-      });
-      const harness = yield* makeHarness(
-        fake,
-        INSTANCE_ID,
-        undefined,
-        undefined,
-        undefined,
-        policy,
-      );
-      const { nativeId } = yield* startConversation(harness, fake);
-      const edit = {
-        ...approval(nativeId),
-        protectedWrite: false,
-        judgeEscalated: false,
-        subject: { kind: "fileAccess", access: "write", path: "src/result.ts" },
-      };
-      yield* fake.emit("approval/requested", edit);
-      yield* fake.takeCall("approval/decide");
-      yield* fake.emit("approval/updated", {
-        ...edit,
-        protectedWrite: true,
-        currentRequirementId: { approvalId: edit.approvalId, sourceIndex: 1 },
-      });
-      const pending = yield* harness.takeEvent(
-        "runtime_request.updated",
-        (event) => event.runtimeRequest.status === "pending",
-      );
-      assert.strictEqual(pending.runtimeRequest.nativeRequestRef?.nativeId, edit.approvalId);
-      yield* harness.runtime.respondToRuntimeRequest({
-        requestId: pending.runtimeRequest.id,
-        decision: "accept",
-      });
-      const decision = yield* fake.takeCall("approval/decide");
-      assert.deepStrictEqual(decision.params.requirementId, {
-        approvalId: edit.approvalId,
-        sourceIndex: 1,
-      });
-      yield* fake.emit("approval/resolved", { approvalId: edit.approvalId, turnId: nativeId });
-      yield* harness.takeEvent(
-        "runtime_request.updated",
-        (event) => event.runtimeRequest.status === "resolved",
-      );
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

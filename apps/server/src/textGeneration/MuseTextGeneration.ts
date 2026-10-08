@@ -219,12 +219,16 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
       return yield* new TextGenerationError({ operation, detail: "Muse Code is disabled." });
     }
     const selectedModel = input.modelSelection.model.trim();
-    // Without a model, Muse starts the session on the account's default.
-    const modelId =
-      selectedModel && selectedModel !== MUSE_DEFAULT_MODEL ? selectedModel : undefined;
     const models = yield* modelCatalog;
+    // "default" is the catalog's default model, as in chat. Without one, Muse picks.
+    const catalogModel =
+      selectedModel && selectedModel !== MUSE_DEFAULT_MODEL
+        ? models.find((model) => model.slug === selectedModel)
+        : models.find((model) => model.isDefault && !model.isCustom);
+    const modelId =
+      selectedModel && selectedModel !== MUSE_DEFAULT_MODEL ? selectedModel : catalogModel?.slug;
     const reasoningEffort = resolveMuseReasoningEffort(
-      models.find((model) => model.slug === modelId)?.capabilities ?? museModelCapabilities(),
+      catalogModel?.capabilities ?? museModelCapabilities(),
       getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
         DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
     );
