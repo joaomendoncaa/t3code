@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { MspError } from "@muse-code/sdk";
 import {
+  MUSE_DEFAULT_MODEL,
   EnvironmentId,
   MessageId,
   MuseSettings,
@@ -618,6 +619,32 @@ describe("MuseAdapterV2", () => {
         yield* harness.takeEvent("turn.terminal");
       }
       assert.isTrue(fake.calls.some((call) => call.method === "session/setModel"));
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("switches back to Muse's default model when the default follows another model", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      fake.queueResponse("model/list", {
+        models: [
+          { modelId: "account-default", isDefault: true },
+          { modelId: MODEL, isDefault: false },
+        ],
+      });
+      const input = yield* turnInput(harness.providerThread, 1);
+      const selection = { ...input.modelSelection, model: MUSE_DEFAULT_MODEL };
+      yield* harness.runtime.startTurn({
+        ...input,
+        modelSelection: selection,
+        appThread: { ...input.appThread, modelSelection: selection },
+      });
+      const setModel = yield* fake.takeCall("session/setModel");
+      assert.deepStrictEqual(setModel.params.model, {
+        modelId: "account-default",
+        providerId: "meta",
+      });
+      yield* fake.takeCall("turn/start");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

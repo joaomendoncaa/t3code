@@ -240,6 +240,11 @@ const nativeRef = (nativeId: string) => ({
   strength: "strong" as const,
 });
 const recordSchema = Schema.Record(Schema.String, Schema.Unknown);
+const MuseModelDefaults = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({ modelId: Schema.String, isDefault: Schema.optional(Schema.Boolean) }),
+  ),
+});
 // Notifications that only add detail. A malformed one is skipped instead of ending the session.
 const INFORMATIONAL_NOTIFICATIONS = new Set([
   "session/contextUsage",
@@ -317,6 +322,8 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
       let active: ActiveTurn | undefined;
       // The last finished turn, so context usage reported after it still lands on it.
       let lastProviderTurn: OrchestrationV2ProviderTurn | undefined;
+      // Whether the session runs a model T3 chose rather than the account default.
+      let switchedModel = false;
       const pending = new Map<RuntimeRequestId, PendingRequest>();
       const seenTerminals = new Set<string>();
       const observedChildren = new Map<string, ActiveTurn>();
@@ -1355,6 +1362,7 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
             ...session,
             model: result.session.modelId ?? args.modelSelection.model,
           };
+          switchedModel = args.modelSelection.model !== MUSE_DEFAULT_MODEL;
           yield* emit({
             type: "provider_thread.updated",
             driver: MUSE_PROVIDER,
@@ -1428,15 +1436,29 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
           return yield* protocolError("Runtime policy changes require a fresh Muse host");
         const effort = yield* selectionEffort(turnInput.modelSelection);
         const parts = compact ? [] : yield* prompt(turnInput.message);
-        if (
-          turnInput.modelSelection.model !== MUSE_DEFAULT_MODEL &&
-          session.model !== turnInput.modelSelection.model
-        ) {
+        // "default" means the account's default model. After T3 switched this session
+        // to another model, switch back to Muse's default instead of keeping it.
+        const targetModel =
+          turnInput.modelSelection.model !== MUSE_DEFAULT_MODEL
+            ? turnInput.modelSelection.model
+            : switchedModel
+              ? yield* request("model/list", {}, false).pipe(
+                  Effect.flatMap((value) => decode(MuseModelDefaults, value)),
+                  Effect.flatMap(({ models }) => {
+                    const fallback = models.find((model) => model.isDefault)?.modelId;
+                    return fallback
+                      ? Effect.succeed(fallback)
+                      : protocolError("Muse did not report a default model; pick a model");
+                  }),
+                )
+              : undefined;
+        if (targetModel && session.model !== targetModel) {
           yield* request("session/setModel", {
-            model: { modelId: turnInput.modelSelection.model, providerId: "meta" },
+            model: { modelId: targetModel, providerId: "meta" },
           });
-          session = { ...session, model: turnInput.modelSelection.model };
+          session = { ...session, model: targetModel };
         }
+        switchedModel = turnInput.modelSelection.model !== MUSE_DEFAULT_MODEL;
         const nativeId = host.connection.mintCommandId();
         const startedAt = yield* DateTime.now;
         const providerTurn: OrchestrationV2ProviderTurn = {
