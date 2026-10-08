@@ -424,7 +424,8 @@ export function makeMuseAdapterV2(options: MuseAdapterV2Options): ProviderAdapte
         item: MuseItem,
         terminal?: OrchestrationV2TurnItem["status"],
       ) {
-        if (item.kind === "userMessage") return;
+        // Muse's skill-reminder child runs on every model step; it is housekeeping, not work.
+        if (item.kind === "userMessage" || item.kind === "reminderChild") return;
         if (item.kind === "toolCall" && item.tool && TOOLS_WITH_NATIVE_ROWS.has(item.tool)) return;
         const time = yield* DateTime.now;
         const status = terminal ?? museItemStatus(item);

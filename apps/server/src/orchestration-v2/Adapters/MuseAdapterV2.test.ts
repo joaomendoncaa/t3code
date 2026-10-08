@@ -1550,7 +1550,8 @@ describe("MuseAdapterV2", () => {
       const fake = yield* makeFakeMuse();
       const harness = yield* makeHarness(fake);
       const { nativeId } = yield* startConversation(harness, fake);
-      // The tool call that wrote the list must not also show as a generic tool row.
+      // Neither the tool call that wrote the list nor Muse's per-step reminder
+      // child may show as a generic tool row.
       yield* fake.emit("item/completed", {
         turnId: nativeId,
         item: {
@@ -1560,6 +1561,17 @@ describe("MuseAdapterV2", () => {
           tool: "write_todos",
           revision: 1,
           status: "completed",
+        },
+      });
+      yield* fake.emit("item/started", {
+        turnId: nativeId,
+        item: {
+          itemId: "reminder",
+          turnId: nativeId,
+          kind: "reminderChild",
+          revision: 1,
+          status: "inProgress",
+          fallbackText: "Reminder child session",
         },
       });
       yield* fake.emit("session/todoListChanged", {

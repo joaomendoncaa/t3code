@@ -111,10 +111,7 @@ describe("Muse item presentation", () => {
     },
   );
 
-  it("keeps reminder and native child summaries as neutral activity", () => {
-    expect(
-      museToolPresentation(item({ kind: "reminderChild", fallbackText: "Reminder child session" })),
-    ).toMatchObject({ type: "dynamic_tool", title: "Reminder", output: "Reminder child session" });
+  it("keeps native child summaries as neutral activity", () => {
     expect(
       museToolPresentation(
         item({ kind: "subagent", objective: "Review patch", result: { summary: "No issues" } }),
