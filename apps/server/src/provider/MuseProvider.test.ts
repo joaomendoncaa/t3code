@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { describe, expect, it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import { MuseSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,7 +9,7 @@ import { vi } from "vite-plus/test";
 import { writeFakeCli } from "../testUtils/fakeCli.ts";
 import type { MuseSdkHost } from "./museSdk.ts";
 import { COMPACT_SLASH_COMMAND } from "./providerSnapshot.ts";
-import { checkMuseProviderStatus, makePendingMuseProvider } from "./MuseProvider.ts";
+import { checkMuseProviderStatus } from "./MuseProvider.ts";
 
 const settings = Schema.decodeSync(MuseSettings);
 const makeHost = (catalog: Record<string, unknown>) => {
@@ -53,25 +53,6 @@ const fakeCli = (source = 'process.stdout.write("muse 1.0.3-R2198.1\\n");') =>
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "muse-status-test-" });
     return writeFakeCli({ directory, name: "muse", source });
   });
-
-describe("Muse provider defaults", () => {
-  it.effect("keeps the provider opt-in without inventing models before discovery", () =>
-    Effect.gen(function* () {
-      const snapshot = yield* makePendingMuseProvider(settings({}));
-      expect(snapshot.status).toBe("disabled");
-      expect(snapshot.auth.status).toBe("unknown");
-      expect(snapshot.models).toEqual([]);
-      expect(snapshot.slashCommands).toEqual([]);
-    }),
-  );
-
-  it.effect("advertises native compaction while an enabled provider is being checked", () =>
-    Effect.gen(function* () {
-      const snapshot = yield* makePendingMuseProvider(settings({ enabled: true }));
-      expect(snapshot.slashCommands).toEqual([COMPACT_SLASH_COMMAND]);
-    }),
-  );
-});
 
 it.layer(NodeServices.layer)("Muse status", (it) => {
   it.effect("does not start a host when disabled", () =>

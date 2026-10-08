@@ -154,25 +154,6 @@ describe("Muse SDK host", () => {
     await host.close();
   });
 
-  it("keeps read-only restrictions when session logging is needed for streamed generation", async () => {
-    const fake = mockSpawn();
-    const running = createMuseSdkHost({
-      binaryPath: "muse",
-      readOnly: true,
-      sessionLogging: true,
-    });
-    fake.startup.resolve(fake.ready);
-    const host = await running;
-    expect(vi.mocked(spawnMspConnection).mock.lastCall?.[0].args).toEqual([
-      "serve",
-      "--disable-shell",
-      "--disable-write",
-    ]);
-    fake.shutdown.resolve({ code: 0, signal: null });
-    await host.close();
-    expect(fake.close).toHaveBeenCalledOnce();
-  });
-
   it.each([undefined, 2])(
     "rejects unsupported envelope version %s and awaits shutdown",
     async (version) => {

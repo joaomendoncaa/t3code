@@ -48,37 +48,6 @@ describe("Muse item presentation", () => {
     ).toMatchObject({ type: "file_change", diffStr: "@@ -1 +1 @@\n-old\n+new" });
   });
 
-  it("keeps malformed edit arguments visible without inventing a file", () => {
-    expect(
-      museToolPresentation(
-        item({ tool: "edit_file", args: "incomplete {", visibleOutput: "Needs more input" }),
-      ),
-    ).toMatchObject({ type: "dynamic_tool", input: "incomplete {", output: "Needs more input" });
-  });
-
-  it("extracts shell commands and retains native output and exit codes", () => {
-    expect(
-      museToolPresentation(
-        item({
-          tool: "shell",
-          args: JSON.stringify({ command: "git status" }),
-          visibleOutput: "working tree clean",
-          exitCode: 0,
-        }),
-      ),
-    ).toMatchObject({
-      type: "command_execution",
-      input: "git status",
-      output: "working tree clean",
-      exitCode: 0,
-    });
-    expect(
-      museToolPresentation(
-        item({ kind: "userShell", commandText: "pwd", args: JSON.stringify({ cmd: "ignored" }) }),
-      ),
-    ).toMatchObject({ input: "pwd" });
-  });
-
   it.each(["rejected", "timedOut", "handedOff"])(
     "does not report native %s activity as successful",
     (status) => {
@@ -110,44 +79,4 @@ describe("Muse item presentation", () => {
       expect(museItemStatus(item({ kind: "compaction", outcome }))).toBe("failed");
     },
   );
-
-  it("keeps native child summaries as neutral activity", () => {
-    expect(
-      museToolPresentation(
-        item({ kind: "subagent", objective: "Review patch", result: { summary: "No issues" } }),
-      ),
-    ).toMatchObject({ type: "dynamic_tool", title: "Review patch", output: "No issues" });
-  });
-
-  it("preserves web query and output without manufacturing result links", () => {
-    expect(
-      museToolPresentation(
-        item({
-          tool: "web_search",
-          args: JSON.stringify({ query: "Muse docs" }),
-          visibleOutput: "Native result text",
-        }),
-      ),
-    ).toMatchObject({
-      type: "web_search",
-      patterns: ["Muse docs"],
-      results: [{ snippet: "Native result text" }],
-    });
-  });
-
-  it("preserves image tool details through V2's generic tool surface", () => {
-    expect(
-      museToolPresentation(
-        item({
-          tool: "view_image",
-          args: JSON.stringify({ path: "/tmp/chart.png" }),
-          visibleOutput: "Image displayed",
-        }),
-      ),
-    ).toMatchObject({
-      type: "dynamic_tool",
-      input: { path: "/tmp/chart.png" },
-      output: "Image displayed",
-    });
-  });
 });

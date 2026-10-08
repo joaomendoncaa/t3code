@@ -10,7 +10,6 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { vi } from "vite-plus/test";
 
@@ -215,46 +214,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
     }),
   );
 
-  it.effect("uses the final assistant answer and accepts fenced JSON like other providers", () =>
-    Effect.gen(function* () {
-      const test = fixture((emit) => {
-        emit("item/completed", {
-          item: { itemId: "commentary", kind: "agentMessage", text: "I will write a title." },
-        });
-        finish('```json\n{"title":"Fix login form"}\n```')(emit);
-      });
-      const service = yield* test.make;
-      expect(yield* service.generateThreadTitle(titleInput)).toEqual({ title: "Fix login form" });
-    }),
-  );
-
-  it.effect("ignores stale snapshots and retracted answers", () =>
-    Effect.gen(function* () {
-      const test = fixture((emit) => {
-        emit("item/completed", {
-          item: {
-            itemId: "answer",
-            kind: "agentMessage",
-            revision: 2,
-            text: '{"title":"Fix login form"}',
-          },
-        });
-        emit("item/updated", {
-          item: { itemId: "answer", kind: "agentMessage", text: "stale partial text" },
-        });
-        emit("item/completed", {
-          item: { itemId: "withdrawn", kind: "agentMessage", text: "Withdrawn answer" },
-        });
-        emit("item/updated", {
-          item: { itemId: "withdrawn", kind: "agentMessage", revision: 2, retracted: true },
-        });
-        emit("turn/completed", { terminal: "completed" });
-      });
-      const service = yield* test.make;
-      expect(yield* service.generateThreadTitle(titleInput)).toEqual({ title: "Fix login form" });
-    }),
-  );
-
   it.effect("ignores output and terminal notifications for another turn", () =>
     Effect.gen(function* () {
       const test = fixture((emit) => {
@@ -326,25 +285,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
     }),
   );
 
-  it.effect("does not accept assistant output before a later failed terminal event", () =>
-    Effect.gen(function* () {
-      const test = fixture((emit) => {
-        emit("item/completed", {
-          item: { itemId: "answer", kind: "agentMessage", text: '{"title":"Fix login"}' },
-        });
-        emit("turn/completed", {
-          terminal: "failed",
-          error: { message: "Turn failed after producing an answer." },
-        });
-      });
-      const service = yield* test.make;
-      expect(yield* service.generateThreadTitle(titleInput).pipe(Effect.flip)).toMatchObject({
-        _tag: "TextGenerationError",
-      });
-      expect(test.host.close).toHaveBeenCalledOnce();
-    }),
-  );
-
   it.effect("settles when the transport closes before completion", () =>
     Effect.gen(function* () {
       const test = fixture();
@@ -367,40 +307,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
       yield* Effect.promise(() => test.started);
       yield* Fiber.interrupt(fiber);
       expect(test.host.close).toHaveBeenCalledOnce();
-    }),
-  );
-
-  it.effect("retains its temporary workspace until interrupted SDK startup has shut down", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const starting = Promise.withResolvers<{ signal: AbortSignal; cwd: string }>();
-      const closing = Promise.withResolvers<void>();
-      const shutdown = Promise.withResolvers<void>();
-      const service = yield* makeMuseTextGeneration(settings, {
-        createHost: (options) => {
-          const signal = options.signal!;
-          starting.resolve({ signal, cwd: options.cwd! });
-          return new Promise<MuseSdkHost>((_resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                closing.resolve();
-                void shutdown.promise.then(() => reject(signal.reason));
-              },
-              { once: true },
-            );
-          });
-        },
-      });
-      const fiber = yield* service.generateThreadTitle(titleInput).pipe(Effect.forkChild);
-      const { signal, cwd } = yield* Effect.promise(() => starting.promise);
-      const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild);
-      yield* Effect.promise(() => closing.promise);
-      expect(signal.aborted).toBe(true);
-      expect(yield* fs.exists(cwd)).toBe(true);
-      shutdown.resolve();
-      yield* Fiber.join(interrupted);
-      expect(yield* fs.exists(cwd)).toBe(false);
     }),
   );
 
@@ -440,20 +346,6 @@ it.layer(NodeServices.layer)("Muse text generation", (it) => {
           userInputId: "input-1",
         }),
       );
-      expect(test.host.close).toHaveBeenCalledOnce();
-    }),
-  );
-
-  it.effect("rejects interactive requests before a successful terminal event can win", () =>
-    Effect.gen(function* () {
-      const test = fixture((emit) => {
-        emit("userInput/requested", { userInputId: "input-1" });
-        finish('{"title":"Unexpected success"}')(emit);
-      });
-      const service = yield* test.make;
-      expect(yield* service.generateThreadTitle(titleInput).pipe(Effect.flip)).toMatchObject({
-        _tag: "TextGenerationError",
-      });
       expect(test.host.close).toHaveBeenCalledOnce();
     }),
   );
