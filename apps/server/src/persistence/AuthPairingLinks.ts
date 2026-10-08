@@ -172,7 +172,9 @@ export const make = Effect.gen(function* () {
             proof_key_thumbprint IS NULL
             OR proof_key_thumbprint = ${proofKeyThumbprint}
           )
-          AND (${requestedScopes === undefined} OR EXISTS (
+          -- node:sqlite cannot bind booleans, so the undefined check ships
+          -- as 1/0 (regression from the better-sqlite3 port + Effect 4).
+          AND (${requestedScopes === undefined ? 1 : 0} OR EXISTS (
             SELECT 1
             FROM json_each(${JSON.stringify(requestedScopes ?? [])}) AS requested
             WHERE requested.value IN (
