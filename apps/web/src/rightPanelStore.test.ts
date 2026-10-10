@@ -671,20 +671,49 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it("persists inline preference without restoring an open popover", () => {
+  it("persists an explicitly opened panel as-is and drops the closed default", () => {
     expect(
       migratePersistedRightPanelState({
         threadPanelVisibilityByThreadKey: {
           "env-1:thread-A": { inlineOpen: false, popoverOpen: true },
           "env-1:thread-B": { inlineOpen: true, popoverOpen: true },
+          "env-1:thread-C": { inlineOpen: false, popoverOpen: false },
         },
       }),
     ).toEqual({
       byThreadKey: {},
       threadPanelVisibilityByThreadKey: {
-        "env-1:thread-A": { inlineOpen: false, popoverOpen: false },
+        "env-1:thread-A": { inlineOpen: false, popoverOpen: true },
+        "env-1:thread-B": { inlineOpen: true, popoverOpen: true },
       },
     });
+  });
+
+  it("tracks inline and popover visibility independently", () => {
+    const store = useRightPanelStore.getState();
+
+    expect(selectThreadPanelOpen(store.threadPanelVisibilityByThreadKey, refA, "inline")).toBe(
+      false,
+    );
+    expect(selectThreadPanelOpen(store.threadPanelVisibilityByThreadKey, refA, "popover")).toBe(
+      false,
+    );
+
+    store.setThreadPanelOpen(refA, "inline", true);
+    store.toggleThreadPanel(refA, "popover");
+
+    expect(
+      selectThreadPanelVisibility(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refA,
+      ),
+    ).toEqual({ inlineOpen: true, popoverOpen: true });
+    expect(
+      selectThreadPanelVisibility(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refB,
+      ),
+    ).toEqual({ inlineOpen: false, popoverOpen: false });
   });
 
   it("closes the popover atomically when the real right panel opens", () => {
@@ -696,7 +725,7 @@ describe("rightPanelStore", () => {
         useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
         refA,
       ),
-    ).toEqual({ inlineOpen: true, popoverOpen: false });
+    ).toEqual({ inlineOpen: false, popoverOpen: false });
   });
 
   it("keeps an open popover visible by promoting it to inline when the real panel closes", () => {
