@@ -1803,6 +1803,7 @@ code {
 :root {
   --diffs-font-family: var(--font-mono);
   --diffs-header-font-family: var(--font-sans);
+  --diffs-line-height: 1.6;
 }
 
 /* Pele diagrams read their colors through these, so a theme change recolors
