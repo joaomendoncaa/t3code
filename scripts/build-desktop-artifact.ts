@@ -4064,10 +4064,19 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   for (const entry of stageEntries) {
     const from = path.join(stageDistDir, entry);
     const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
+    if (!stat) continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
+    // Directory targets (e.g. linux `dir`) emit an unpacked app directory
+    // instead of a packaged file; copy it through so local install flows can
+    // sync it without an AppImage compress/extract roundtrip.
+    if (stat.type === "Directory") {
+      yield* fs.copy(from, to, { overwrite: true });
+    } else if (stat.type === "File") {
+      yield* fs.copyFile(from, to);
+    } else {
+      continue;
+    }
     copiedArtifacts.push(to);
   }
 
