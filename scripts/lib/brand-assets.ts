@@ -4,14 +4,16 @@ export const BRAND_ASSET_PATHS = {
   developmentUniversalIconPng: "assets/dev/blueprint-universal-1024.png",
 
   productionIconComposerProject: "assets/prod/app-icon.icon",
-  productionIosIconPng: "assets/prod/black-ios-1024.png",
-  productionMacIconPng: "assets/prod/black-macos-1024.png",
-  productionLinuxIconPng: "assets/prod/black-universal-1024.png",
-  productionWindowsIconIco: "assets/prod/t3-black-windows.ico",
-  productionWebFaviconIco: "assets/prod/t3-black-web-favicon.ico",
-  productionWebFavicon16Png: "assets/prod/t3-black-web-favicon-16x16.png",
-  productionWebFavicon32Png: "assets/prod/t3-black-web-favicon-32x32.png",
-  productionWebAppleTouchIconPng: "assets/prod/t3-black-web-apple-touch-180.png",
+  // Clankers fork: production rasters are the robot icon. Do not regenerate
+  // these from the T3 Icon Composer project via export-brand-icons.
+  productionIosIconPng: "assets/clankers/clankers-ios-1024.png",
+  productionMacIconPng: "assets/clankers/clankers-macos-1024.png",
+  productionLinuxIconPng: "assets/clankers/clankers-universal-1024.png",
+  productionWindowsIconIco: "assets/clankers/clankers-windows.ico",
+  productionWebFaviconIco: "assets/clankers/clankers-web-favicon.ico",
+  productionWebFavicon16Png: "assets/clankers/clankers-web-favicon-16x16.png",
+  productionWebFavicon32Png: "assets/clankers/clankers-web-favicon-32x32.png",
+  productionWebAppleTouchIconPng: "assets/clankers/clankers-web-apple-touch-180.png",
 
   nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyIosIconPng: "assets/nightly/nightly-ios-1024.png",
