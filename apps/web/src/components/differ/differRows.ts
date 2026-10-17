@@ -5,29 +5,43 @@
 import { buildRows, type Row } from "./rows";
 import type { DifferFileEntry } from "./DifferTreeView";
 
-export function differRowsForEntries(entries: DifferFileEntry[]): Row[] {
-  const allOld: string[] = [];
-  const allNew: string[] = [];
+export function differRowsForEntries(
+  entries: DifferFileEntry[],
+  full?: { allOld?: string[] | undefined; allNew?: string[] | undefined },
+): Row[] {
+  const oldFromEntries: string[] = [];
+  const newFromEntries: string[] = [];
   const renames = new Map<string, string>();
   const files = entries.map((entry) => {
     switch (entry.status) {
       case "Added":
-        allNew.push(entry.path);
+        newFromEntries.push(entry.path);
         return { path: entry.path, status: "Added" };
       case "Deleted":
-        allOld.push(entry.prevPath);
+        oldFromEntries.push(entry.prevPath);
         return { path: entry.prevPath, status: "Deleted" };
       case "Renamed":
-        allOld.push(entry.prevPath);
-        allNew.push(entry.path);
+        oldFromEntries.push(entry.prevPath);
+        newFromEntries.push(entry.path);
         renames.set(entry.prevPath, entry.path);
         return { path: `${entry.prevPath} -> ${entry.path}`, status: "Renamed" };
+      case "Unchanged":
+        oldFromEntries.push(entry.path);
+        newFromEntries.push(entry.path);
+        return { path: entry.path, status: "Unchanged" };
       case "Modified":
       default:
-        allOld.push(entry.path);
-        allNew.push(entry.path);
+        oldFromEntries.push(entry.path);
+        newFromEntries.push(entry.path);
         return { path: entry.path, status: "Modified" };
     }
   });
+  // Differ renders the entire tree: allOld/allNew are the full file lists
+  // at each rev, and unchanged paths become "same" rows (collapsed by
+  // defaultCollapsed). Until callers plumb a full listing, this unions the
+  // entry-derived paths with the optional full lists, so diff-only input
+  // keeps today's behavior unchanged.
+  const allOld = [...new Set([...(full?.allOld ?? []), ...oldFromEntries])];
+  const allNew = [...new Set([...(full?.allNew ?? []), ...newFromEntries])];
   return buildRows(allOld, allNew, { files, symbols: [] }, renames);
 }
