@@ -125,6 +125,8 @@ function drawCell(
   bgX0?: number,
   bgW?: number,
   spin: string = SPIN[0] ?? "",
+  font: string = FONT,
+  markFont: string = MARK_FONT,
 ) {
   const chrome = dark ? DARK_CHROME : LIGHT_CHROME;
   // Background stretches full-bleed (stage width); text stays at x0/w so
@@ -159,7 +161,7 @@ function drawCell(
       const bx0 = bgX0 ?? x0;
       const bw = bgW ?? w;
       ctx.fillStyle = dark ? "#71717a" : "#a1a1aa";
-      ctx.font = FONT;
+      ctx.font = font;
       ctx.textAlign = "center";
       ctx.fillText(`${cell.gapCount ?? "?"} unmodified lines`, bx0 + bw / 2, cy);
       ctx.textAlign = "left";
@@ -168,7 +170,7 @@ function drawCell(
   }
   ctx.fillStyle = fg;
   ctx.textAlign = "left";
-  ctx.font = MARK_FONT;
+  ctx.font = markFont;
   ctx.fillText(m.mark, x0 + 8, cy);
   const tx = x0 + 24;
   ctx.fillStyle = chrome.guide;
@@ -176,7 +178,7 @@ function drawCell(
   const bx = tx + cell.depth * INDENT;
   if (twisty) {
     ctx.fillStyle = fg;
-    ctx.font = MARK_FONT;
+    ctx.font = markFont;
     ctx.textAlign = "center";
     ctx.fillText(twisty === "open" ? "▾" : "▸", bx + 7, cy);
     ctx.textAlign = "left";
@@ -189,7 +191,7 @@ function drawCell(
   const label = cellLabel(cell);
   ctx.fillStyle = fg;
   ctx.globalAlpha = dim ? 0.55 : 1;
-  ctx.font = cell.isFolder ? MARK_FONT : FONT;
+  ctx.font = cell.isFolder ? markFont : font;
   ctx.fillText(ellipsize(ctx, dim ? `${label}  ${spin}` : label, x0 + w - lx - 8), lx, cy);
   ctx.globalAlpha = 1;
 }
@@ -207,6 +209,8 @@ export default function DiffCanvas({
   hl = null,
   loading = null,
   bare = null,
+  font = FONT,
+  markFont = MARK_FONT,
 }: {
   rows: Row[];
   cam: Cam;
@@ -221,6 +225,8 @@ export default function DiffCanvas({
   loading?: Set<string> | null;
   // Code-slot indices to draw untinted (pierre overlay not painted yet).
   bare?: Set<number> | null;
+  font?: string;
+  markFont?: string;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [iconTick, bump] = useReducer((n: number) => n + 1, 0);
@@ -304,6 +310,8 @@ export default function DiffCanvas({
           worldL,
           mid - worldL,
           spinFrame,
+          font,
+          markFont,
         );
         drawCell(
           ctx,
@@ -321,6 +329,8 @@ export default function DiffCanvas({
           mid,
           worldR - mid,
           spinFrame,
+          font,
+          markFont,
         );
         hlRow(it, y);
         hlRow(it, y);
@@ -362,6 +372,8 @@ export default function DiffCanvas({
           worldL,
           mid - worldL,
           spinFrame,
+          font,
+          markFont,
         );
         drawCell(
           ctx,
@@ -379,6 +391,8 @@ export default function DiffCanvas({
           mid,
           worldR - mid,
           spinFrame,
+          font,
+          markFont,
         );
         hlRow(it, y);
         ctx.fillStyle = chrome.hairline;
@@ -411,6 +425,8 @@ export default function DiffCanvas({
     loading,
     bare,
     spinTick,
+    font,
+    markFont,
   ]);
 
   return (

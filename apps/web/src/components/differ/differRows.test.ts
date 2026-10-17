@@ -38,4 +38,24 @@ describe("differRowsForEntries", () => {
   it("returns an empty tree for no entries", () => {
     expect(differRowsForEntries([])).toEqual([]);
   });
+
+  it("renders untouched paths from full lists as same-status rows", () => {
+    const rows = differRowsForEntries(
+      [{ path: "src/app.ts", prevPath: "src/app.ts", status: "Modified" }],
+      { allOld: ["src/app.ts", "src/quiet.ts"], allNew: ["src/app.ts", "src/quiet.ts"] },
+    );
+
+    expect(rowForPath(rows, "src/app.ts")?.status).toBe("mod");
+    expect(rowForPath(rows, "src/quiet.ts")?.status).toBe("same");
+  });
+
+  it("renders untouched paths from full lists as same-status rows", () => {
+    const rows = differRowsForEntries(
+      [{ path: "src/app.ts", prevPath: "src/app.ts", status: "Modified" }],
+      { allOld: ["src/app.ts", "src/quiet.ts"], allNew: ["src/app.ts", "src/quiet.ts"] },
+    );
+
+    expect(rowForPath(rows, "src/app.ts")?.status).toBe("mod");
+    expect(rowForPath(rows, "src/quiet.ts")?.status).toBe("same");
+  });
 });

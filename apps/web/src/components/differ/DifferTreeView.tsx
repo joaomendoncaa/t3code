@@ -20,13 +20,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useTheme } from "../../hooks/useTheme";
+import { useClientSettings } from "../../hooks/useSettings";
+import {
+  appearanceFontStack,
+  clampCodeFontSize,
+  DEFAULT_CODE_FONT_STACK,
+} from "../../appearanceFonts";
+import { DEFAULT_CODE_FONT_SIZE } from "@t3tools/contracts";
 import DiffCanvas, { hitRow } from "./DiffCanvas";
 import { differRowsForEntries } from "./differRows";
 import Minimap from "./Minimap";
 import { collapseRows, defaultCollapsed, filterRows, rowKey, type Row } from "./rows";
 import { DiffStatLabel } from "../chat/DiffStatLabel";
 
-export type DifferFileStatus = "Added" | "Modified" | "Deleted" | "Renamed";
+export type DifferFileStatus = "Added" | "Modified" | "Deleted" | "Renamed" | "Unchanged";
 
 export interface DifferFileEntry {
   /** New path (or only path for add/modify/delete). */
@@ -38,14 +45,16 @@ export interface DifferFileEntry {
 
 interface DifferTreeViewProps {
   entries: DifferFileEntry[];
+  /** Full file lists at each rev; when present, untouched paths render as
+   * collapsed "same" rows like differ. Absent = diff nodes only. */
+  allOld?: string[];
+  allNew?: string[];
   /** e.g. "Changes", "Uncommitted", "Turn 3". From T3's diff selection. */
   scopeLabel: string;
   baseLabel: string | null;
   headLabel: string | null;
   onOpenFile: (path: string) => void;
 }
-
-const ROW_H = 28;
 
 function isFileRow(row: Row): boolean {
   const cell = row.right ?? row.left;
@@ -55,8 +64,20 @@ function isFileRow(row: Row): boolean {
 export default function DifferTreeView(props: DifferTreeViewProps) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
+  // Canvas text can't read CSS vars, so resolve the code font here and hand
+  // concrete values down. Row height scales from 28px at the 13px default.
+  const fontSizeCode = useClientSettings((settings) => settings.fontSizeCode);
+  const fontFamilyCode = useClientSettings((settings) => settings.fontFamilyCode);
+  const codeSize = clampCodeFontSize(fontSizeCode);
+  const codeFamily = appearanceFontStack(fontFamilyCode, DEFAULT_CODE_FONT_STACK);
+  const treeFont = `${codeSize}px ${codeFamily}`;
+  const treeMarkFont = `bold ${codeSize}px ${codeFamily}`;
+  const rowH = Math.max(20, Math.round((28 * codeSize) / DEFAULT_CODE_FONT_SIZE));
 
-  const rows = useMemo(() => differRowsForEntries(props.entries), [props.entries]);
+  const rows = useMemo(
+    () => differRowsForEntries(props.entries, { allOld: props.allOld, allNew: props.allNew }),
+    [props.entries, props.allOld, props.allNew],
+  );
 
   const visible = useMemo(
     () =>
@@ -115,11 +136,11 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
 
   const clampY = useCallback(
     (next: number) => {
-      const total = list.length * ROW_H;
+      const total = list.length * rowH;
       if (total <= stageH || stageH <= 0) return 0;
       return Math.min(0, Math.max(stageH - total, next));
     },
-    [list.length, stageH],
+    [list.length, rowH, stageH],
   );
 
   const onWheel = useCallback(
@@ -134,9 +155,9 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
   const jumpTo = useCallback(
     (idx: number) => {
       if (!stageH) return;
-      setY(clampY(stageH / 2 - (idx + 0.5) * ROW_H));
+      setY(clampY(stageH / 2 - (idx + 0.5) * rowH));
     },
-    [clampY, stageH],
+    [clampY, rowH, stageH],
   );
 
   const onClick = useCallback(
@@ -146,7 +167,7 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
       const rect = stage.getBoundingClientRect();
       const mx = event.clientX - rect.left;
       const my = event.clientY - rect.top;
-      const idx = hitRow(list, { x: 0, y, k: 1 }, ROW_H, mx, my, stageW);
+      const idx = hitRow(list, { x: 0, y, k: 1 }, rowH, mx, my, stageW);
       if (idx < 0) return;
       const row = list[idx];
       if (!row) return;
@@ -165,7 +186,7 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
         if (cell) props.onOpenFile(cell.path);
       }
     },
-    [list, y, stageW, tree.collapsible, props],
+    [list, rowH, y, stageW, tree.collapsible, props],
   );
 
   const onMouseMove = useCallback(
@@ -176,14 +197,14 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
       const idx = hitRow(
         list,
         { x: 0, y, k: 1 },
-        ROW_H,
+        rowH,
         event.clientX - rect.left,
         event.clientY - rect.top,
         stageW,
       );
       setHover(idx >= 0 ? idx : null);
     },
-    [list, y, stageW],
+    [list, rowH, y, stageW],
   );
 
   const revision = [props.baseLabel, props.headLabel].filter(Boolean).join("…");
@@ -213,7 +234,9 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
               rows={list}
               cam={{ x: 0, y, k: 1 }}
               width={Math.max(stageW, 1)}
-              rowH={ROW_H}
+              rowH={rowH}
+              font={treeFont}
+              markFont={treeMarkFont}
               collapsed={collapsed}
               collapsible={tree.collapsible}
               hover={hover}
@@ -226,7 +249,7 @@ export default function DifferTreeView(props: DifferTreeViewProps) {
             <Minimap
               full={list}
               cam={{ x: 0, y, k: 1 }}
-              rowH={ROW_H}
+              rowH={rowH}
               viewH={stageH}
               onJump={jumpTo}
               dark={dark}
