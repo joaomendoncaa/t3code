@@ -96,7 +96,7 @@ export const uninstallCommand = Command.make("uninstall", {
   ),
 }).pipe(
   Command.withDescription(
-    "Remove t3 from this machine: the background service, the launcher, and every downloaded version. Your projects and threads are kept.",
+    "Remove clankers from this machine: the background service, the launcher, and every downloaded version. Your projects and threads are kept.",
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -202,5 +202,5 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
     }
   }
   yield* Console.log("");
-  yield* Console.log("t3 is uninstalled. Thanks for trying T3 Code.");
+  yield* Console.log("clankers is uninstalled. Thanks for trying T3 Code.");
 });

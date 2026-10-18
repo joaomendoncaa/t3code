@@ -149,7 +149,7 @@ user's environment and evidence instead of filing a new issue. A confirmed
 duplicate with fresh evidence is more useful than a second thread.
 `;
 
-/** Where the session started: the `t3 triage` CLI, or "Triage an issue" in a client. */
+/** Where the session started: the `clankers triage` CLI, or "Triage an issue" in a client. */
 export type TriageEntry =
   | { readonly kind: "cli"; readonly cliVersion: string; readonly launchedAs: string }
   | { readonly kind: "app"; readonly client: string };
@@ -170,7 +170,7 @@ export const buildTriageSeedPrompt = (input: {
   readonly contextFilePath: string;
   readonly entry: TriageEntry;
 }) => `A T3 Code user is having a problem with their install and started this \
-session ${input.entry.kind === "cli" ? "with `t3 triage`" : "from the T3 Code app"}.
+session ${input.entry.kind === "cli" ? "with `clankers triage`" : "from the T3 Code app"}.
 
 Machine facts (versions, OS, paths, server liveness) are in the triage context file:
 
@@ -223,8 +223,8 @@ export interface TriageContextInput {
 const entryLines = (entry: TriageEntry) =>
   entry.kind === "cli"
     ? {
-        generatedBy: "`t3 triage`",
-        before: `- Triage CLI version: ${entry.cliVersion} (the \`t3\` that ran this command; the bug may have happened on another build)`,
+        generatedBy: "`clankers triage`",
+        before: `- Triage CLI version: ${entry.cliVersion} (the \`clankers\` that ran this command; the bug may have happened on another build)`,
         after: `- CLI launched as: ${entry.launchedAs}`,
       }
     : {

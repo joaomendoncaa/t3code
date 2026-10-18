@@ -9,11 +9,11 @@
 #                            (default: stable; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
 #   T3CODE_HOME              T3 home directory (default: ~/.t3)
-#   T3CODE_INSTALL_BIN_DIR   where the `t3` symlink goes (default: ~/.local/bin)
+#   T3CODE_INSTALL_BIN_DIR   where the `clankers` symlink goes (default: ~/.local/bin)
 #   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
 # The archive is unpacked into $T3CODE_HOME/runtime/versions/<version>, the
-# same layout `t3 service install` uses, so the service reuses this download
+# same layout `clankers service install` uses, so the service reuses this download
 # instead of fetching the release again.
 set -eu
 
@@ -23,7 +23,7 @@ t3_home="${T3CODE_HOME:-$HOME/.t3}"
 bin_dir="${T3CODE_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {
-  printf '\nt3 install: %s\n' "$1" >&2
+  printf '\nclankers install: %s\n' "$1" >&2
   exit 1
 }
 
@@ -171,7 +171,7 @@ fi
 case "$version" in
   *-preview.*)
     printf '%s\n' \
-      "t3 ${version} is a preview build." \
+      "clankers ${version} is a preview build." \
       "  Preview builds are cut by maintainers from unreleased branches to exercise the release" \
       "  pipeline. They can be broken, receive no fixes, and are never offered as updates." \
       "  Set T3CODE_CHANNEL=stable (the default) for a supported build." >&2
@@ -181,7 +181,7 @@ case "$version" in
     ;;
 esac
 
-stem="t3-${version}-${platform}-${arch}"
+stem="clankers-${version}-${platform}-${arch}"
 archive="${stem}.tar.gz"
 versions_dir="${t3_home}/runtime/versions"
 target_dir="${versions_dir}/${version}"
@@ -202,7 +202,7 @@ else
   fetch_status=0
   fetch "${base_url}/v${version}/SHA256SUMS" "${staging}/SHA256SUMS" || fetch_status=$?
   if [ "$fetch_status" -eq 44 ]; then
-    fail "t3 ${version} has no release archive for ${platform}-${arch}; releases before the self-contained CLI can only be installed with \`npm install -g t3@${version}\`"
+    fail "clankers ${version} has no release archive for ${platform}-${arch}; releases before the self-contained CLI can only be installed with \`npm install -g clankers@${version}\`"
   elif [ "$fetch_status" -ne 0 ]; then
     fail "could not download the release checksums"
   fi
@@ -217,7 +217,7 @@ else
   step "Extracting T3 Code..."
   tar -xzf "${staging}/${archive}" -C "$staging" --strip-components=1
   rm -f "${staging}/${archive}" "${staging}/SHA256SUMS"
-  "${staging}/t3" --version >/dev/null || fail "the downloaded executable does not run"
+  "${staging}/clankers" --version >/dev/null || fail "the downloaded executable does not run"
   printf '%s\n' "$version" > "${staging}/.install-complete"
 
   rm -rf "$target_dir"
@@ -225,16 +225,16 @@ else
   trap - EXIT
 fi
 
-step "Setting up the t3 command..."
+step "Setting up the clankers command..."
 mkdir -p "$bin_dir"
-ln -sfn "${target_dir}/t3" "${bin_dir}/t3"
+ln -sfn "${target_dir}/clankers" "${bin_dir}/clankers"
 # Pruning keeps what this launcher points at; a background service cannot see bin_dir otherwise.
-launcher="$(CDPATH='' cd -P -- "$bin_dir" && pwd)/t3"
+launcher="$(CDPATH='' cd -P -- "$bin_dir" && pwd)/clankers"
 launchers="${t3_home}/runtime/launchers"
 grep -qxF "$launcher" "$launchers" 2>/dev/null || printf '%s\n' "$launcher" >> "$launchers"
 if "$interactive"; then printf '\r\033[2K' >&2; fi
 printf '  %sInstalled T3 Code %s%s\n\n' "$green" "$version" "$reset" >&2
 case ":${PATH}:" in
-  *":${bin_dir}:"*) printf '  Run %st3%s to get started.\n\n' "$bold" "$reset" ;;
-  *) printf '  Add %s to your PATH, then run %st3%s.\n\n' "$bin_dir" "$bold" "$reset" ;;
+  *":${bin_dir}:"*) printf '  Run %sclankers%s to get started.\n\n' "$bold" "$reset" ;;
+  *) printf '  Add %s to your PATH, then run %sclankers%s.\n\n' "$bin_dir" "$bold" "$reset" ;;
 esac
