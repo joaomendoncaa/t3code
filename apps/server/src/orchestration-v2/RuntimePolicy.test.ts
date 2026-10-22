@@ -97,6 +97,7 @@ const layerWithPolicy = (policy?: ManagedPolicySummary) =>
             defaultModelSelection: null,
             defaultThreadEnvMode: null,
             autoPull: false,
+            pinNewThreads: false,
             faviconPath: null,
             projectIcon: null,
             scripts: [],
