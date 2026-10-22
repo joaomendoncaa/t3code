@@ -65,6 +65,7 @@ import {
   endpointDefaultPreferenceKey,
   resolveAdvertisedEndpointPairingUrl,
   resolveCurrentOriginPairingUrl,
+  isShareablePairingOrigin,
   isHostedAppPairingUrl,
   endpointShareHint,
 } from "./ConnectionsSettings.logic";
@@ -192,6 +193,10 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
       : isLoopbackHostname(window.location.hostname)
         ? null
         : currentOriginPairingUrl);
+  const isLocalOnlyDesktop =
+    !isShareablePairingOrigin(window.location.protocol) &&
+    (endpointUrl === null || endpointUrl === undefined) &&
+    endpoints.length === 0;
   const [failedCopyValue, setFailedCopyValue] = useState<string | null>(null);
   const revealValue = failedCopyValue ?? shareablePairingUrl ?? credential ?? "";
   const isRevealValueUrl = revealValue !== credential;
@@ -297,7 +302,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             </p>
           ) : shareablePairingUrl === null ? (
             <p className="text-2xs text-muted-foreground/70">
-              Copy the token and pair from another client using this backend&apos;s reachable host.
+              {isLocalOnlyDesktop
+                ? "Network access is off, so another device cannot reach this backend. Turn on Network access to share this pairing link."
+                : "Copy the token and pair from another client using this backend's reachable host."}
             </p>
           ) : null}
         </div>
