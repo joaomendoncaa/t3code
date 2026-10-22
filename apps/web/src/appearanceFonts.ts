@@ -123,7 +123,7 @@ function clampPromptFontSize(value: number): number {
   return clampFontSize(value, MIN_PROMPT_FONT_SIZE, MAX_PROMPT_FONT_SIZE, DEFAULT_PROMPT_FONT_SIZE);
 }
 
-function clampCodeFontSize(value: number): number {
+export function clampCodeFontSize(value: number): number {
   return clampFontSize(value, MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE, DEFAULT_CODE_FONT_SIZE);
 }
 

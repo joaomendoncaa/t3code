@@ -10,6 +10,7 @@ import {
   pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
+  selectThreadPanelOpen,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
   useRightPanelStore,
