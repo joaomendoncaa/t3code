@@ -66,6 +66,15 @@ export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
 }
 
 /**
+ * The desktop renderer runs on the app's custom scheme (t3code://app), which
+ * names no host another device can dial. Only web origins can supply a
+ * shareable pairing URL when the backend has no advertised network endpoint.
+ */
+export function isShareablePairingOrigin(protocol: string): boolean {
+  return protocol === "http:" || protocol === "https:";
+}
+
+/**
  * Copy for the Tailscale HTTPS row when no Tailscale endpoint is advertised.
  * The desktop skips the Tailscale probe until Network access or Tailscale
  * Serve is on (it can trigger a macOS privacy prompt), so a missing endpoint
@@ -412,7 +421,10 @@ export function resolveAdvertisedEndpointPairingUrl(
   return resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential);
 }
 
-export function resolveCurrentOriginPairingUrl(credential: string): string {
+export function resolveCurrentOriginPairingUrl(credential: string): string | null {
+  if (!isShareablePairingOrigin(window.location.protocol)) {
+    return null;
+  }
   const url = new URL("/pair", window.location.href);
   return setPairingTokenOnUrl(url, credential).toString();
 }
