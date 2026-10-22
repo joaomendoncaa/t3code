@@ -56,6 +56,7 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly workspaceRoot?: string;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly autoPull?: boolean;
+  readonly pinNewThreads?: boolean;
   readonly projectIcon?: ProjectIconOverride | null;
   readonly faviconPath?: string | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
@@ -323,6 +324,7 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly title?: string;
         readonly workspaceRoot?: string;
         readonly defaultModelSelection?: ModelSelection | null;
+        readonly pinNewThreads?: boolean;
         readonly scripts?: ReadonlyArray<ProjectScript>;
       }
     | {
@@ -367,6 +369,7 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
       ? {}
       : { defaultModelSelection: input.defaultModelSelection }),
     ...(input.autoPull === undefined ? {} : { autoPull: input.autoPull }),
+    ...(input.pinNewThreads === undefined ? {} : { pinNewThreads: input.pinNewThreads }),
     ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
     ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
     ...(input.defaultThreadEnvMode === undefined

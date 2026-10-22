@@ -95,6 +95,7 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
             defaultModelSelection: null,
             defaultThreadEnvMode: null,
             autoPull: false,
+            pinNewThreads: false,
             faviconPath: null,
             projectIcon: null,
             scripts: [],

@@ -120,7 +120,7 @@ import {
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { environmentProjects } from "../state/projects";
+import { environmentProjects, projectEnvironment } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
@@ -776,6 +776,9 @@ export default function Sidebar() {
     deleteThread,
   } = useThreadActions();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const updateProject = useOrchestrationCommand(projectEnvironment.update, {
     reportFailure: false,
   });
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
@@ -1551,6 +1554,34 @@ export default function Sidebar() {
       }
     })();
   };
+  const attemptProjectPin = (
+    projectRefs: readonly ScopedProjectRef[],
+    pinned: boolean,
+    threadRef: ScopedThreadRef,
+    threadPinned: boolean,
+  ) => {
+    void (async () => {
+      for (const ref of projectRefs) {
+        const result = await updateProject({
+          environmentId: ref.environmentId,
+          input: { projectId: ref.projectId, pinNewThreads: pinned },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: pinned ? "Failed to pin project" : "Failed to unpin project",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return;
+        }
+      }
+      // Pinning a project from a thread says that thread belongs in the pinned list too.
+      if (pinned && !threadPinned) attemptPin(threadRef);
+    })();
+  };
 
   const handleThreadDragStart = (event: DragStartEvent) => {
     const activeKey = String(event.active.id);
@@ -2285,6 +2316,13 @@ export default function Sidebar() {
                   }
                 : null,
               isPinned,
+              projectPin: threadProjectGroup
+                ? {
+                    isPinned: threadProjectGroup.memberProjects.some(
+                      (member) => member.pinNewThreads === true,
+                    ),
+                  }
+                : null,
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
               isSnoozed,
@@ -2365,6 +2403,17 @@ export default function Sidebar() {
             return;
           case "unpin":
             attemptUnpin(threadRef);
+            return;
+          case "pin-project":
+          case "unpin-project":
+            if (threadProjectGroup) {
+              attemptProjectPin(
+                threadProjectGroup.memberProjectRefs,
+                clicked.value === "pin-project",
+                threadRef,
+                isPinned,
+              );
+            }
             return;
           case "auto-settle:enabled":
           case "auto-settle:disabled": {

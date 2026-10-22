@@ -20,6 +20,7 @@ const row = (overrides: Partial<ProjectRow> = {}): ProjectRow => ({
   defaultModelSelection: null,
   defaultThreadEnvMode: null,
   autoPull: false,
+  pinNewThreads: false,
   faviconPath: null,
   projectIcon: null,
   scripts: [],
@@ -75,6 +76,22 @@ describe("planProjectCommand", () => {
       failureOf(withLegacy([legacy, script("another.invalid.id")]))._tag,
       "ProjectCommandInvariantError",
     );
+  });
+
+  it("carries the project thread-pinning flag and omits it when unchanged", () => {
+    const update = (pinNewThreads?: boolean) =>
+      plan(
+        {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-pin-new-threads"),
+          projectId,
+          ...(pinNewThreads === undefined ? {} : { pinNewThreads }),
+        },
+        { project: row() },
+      );
+    assert.strictEqual(payloadOf(update(true)).pinNewThreads, true);
+    assert.strictEqual(payloadOf(update(false)).pinNewThreads, false);
+    assert.isFalse("pinNewThreads" in payloadOf(update()));
   });
 
   it("rejects a workspace root held by another active project", () => {
