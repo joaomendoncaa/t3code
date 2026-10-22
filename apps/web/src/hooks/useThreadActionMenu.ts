@@ -25,6 +25,7 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { threadEnvironment } from "../state/threads";
+import { projectEnvironment } from "../state/projects";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope } from "../state/session";
 import {
@@ -88,6 +89,9 @@ export function useThreadActionMenu(input: {
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const updateProject = useOrchestrationCommand(projectEnvironment.update, {
+    reportFailure: false,
+  });
   const handleNewThread = useNewThreadHandler();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -119,6 +123,24 @@ export function useThreadActionMenu(input: {
       if (!api) return;
       const thread = readThreadShell(threadRef);
       if (!thread) return;
+      const currentProject =
+        projects.find(
+          (candidate) =>
+            candidate.environmentId === thread.environmentId && candidate.id === thread.projectId,
+        ) ?? null;
+      const currentProjectKey = currentProject
+        ? (logicalProjectKeyByPhysicalKey.get(derivePhysicalProjectKey(currentProject)) ??
+          deriveLogicalProjectKeyFromSettings(currentProject, projectGroupingSettings))
+        : null;
+      const projectMembers =
+        currentProjectKey === null
+          ? []
+          : projects.filter(
+              (candidate) =>
+                (logicalProjectKeyByPhysicalKey.get(derivePhysicalProjectKey(candidate)) ??
+                  deriveLogicalProjectKeyFromSettings(candidate, projectGroupingSettings)) ===
+                currentProjectKey,
+            );
       const now = new Date();
       const configLoaded = readEnvironmentServerConfigLoaded(threadRef.environmentId);
       const supports = {
@@ -135,6 +157,9 @@ export function useThreadActionMenu(input: {
         branch: thread.branch ?? null,
         projectFilter: null,
         isPinned: thread.pinnedAt != null,
+        projectPin: currentProject
+          ? { isPinned: projectMembers.some((member) => member.pinNewThreads === true) }
+          : null,
         isSettled: supports.settlement && thread.settledOverride === "settled",
         autoSettleEnabled: thread.autoSettleDisabledAt == null,
         isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
@@ -228,6 +253,28 @@ export function useThreadActionMenu(input: {
           return;
         case "unpin": {
           await reportFailure("Failed to unpin thread", () => confirmAndUnpinThread(threadRef));
+          return;
+        }
+        case "pin-project":
+        case "unpin-project": {
+          const pinned = action === "pin-project";
+          for (const member of projectMembers) {
+            const result = await updateProject({
+              environmentId: member.environmentId,
+              input: { projectId: member.id, pinNewThreads: pinned },
+            });
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              failureToast(
+                pinned ? "Failed to pin project" : "Failed to unpin project",
+                squashAtomCommandFailure(result),
+              );
+              return;
+            }
+          }
+          // Pinning a project from a thread says that thread belongs in the pinned list too.
+          if (pinned && thread.pinnedAt == null) {
+            await reportFailure("Failed to pin thread", () => pinThread(threadRef));
+          }
           return;
         }
         case "auto-settle:enabled":

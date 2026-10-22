@@ -7,6 +7,7 @@ const baseState: ThreadActionMenuState = {
   branch: null,
   projectFilter: null,
   isPinned: false,
+  projectPin: null,
   isSettled: false,
   autoSettleEnabled: true,
   isSnoozed: false,
@@ -26,6 +27,19 @@ const baseState: ThreadActionMenuState = {
 };
 
 describe("buildThreadActionMenuItems", () => {
+  it("puts the project pin directly below the thread pin", () => {
+    const items = buildThreadActionMenuItems({
+      ...baseState,
+      projectPin: { isPinned: true },
+    });
+    expect(items.map((item) => item.id).slice(0, 2)).toEqual(["pin", "unpin-project"]);
+    expect(items[1]?.label).toBe("Unpin project");
+  });
+
+  it("omits the project pin without a project", () => {
+    expect(ids(baseState)).not.toContain("pin-project");
+  });
+
   it.each([false, true])(
     "disables both lifecycle directions without permission (reversed: %s)",
     (reversed) => {

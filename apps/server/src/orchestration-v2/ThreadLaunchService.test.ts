@@ -244,6 +244,7 @@ function makeHarness(options: HarnessOptions = {}) {
               defaultModelSelection: project.defaultModelSelection,
               defaultThreadEnvMode: null,
               autoPull: false,
+              pinNewThreads: false,
               faviconPath: null,
               projectIcon: null,
               scripts: project.scripts,

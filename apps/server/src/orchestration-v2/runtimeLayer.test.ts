@@ -638,6 +638,83 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
 );
 
 it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
+  it.effect("auto-pins new threads while the project pins new threads", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectStore.ProjectStoreV2;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make("runtime-layer-auto-pin-project");
+      const pinnedThreadId = ThreadId.make("runtime-layer-auto-pin-thread");
+      const unpinnedThreadId = ThreadId.make("runtime-layer-auto-pin-thread-off");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+
+      yield* seedProject({
+        projectId,
+        title: "Auto pin",
+        workspaceRoot: "/work/auto-pin",
+        defaultModelSelection: null,
+        createdAt,
+      });
+      yield* projects.apply({
+        sequence: 0,
+        eventId: EventId.make("seed:auto-pin-enable"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "project.meta-updated",
+        payload: { projectId, pinNewThreads: true, updatedAt: createdAt },
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-auto-pin-thread-create"),
+        threadId: pinnedThreadId,
+        projectId,
+        title: "Pinned on create",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      assert.isNotNull((yield* orchestrator.getThreadShell(pinnedThreadId))?.pinnedAt);
+
+      yield* projects.apply({
+        sequence: 0,
+        eventId: EventId.make("seed:auto-pin-disable"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "project.meta-updated",
+        payload: { projectId, pinNewThreads: false, updatedAt: createdAt },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-auto-pin-thread-off-create"),
+        threadId: unpinnedThreadId,
+        projectId,
+        title: "Not pinned on create",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      assert.isNull((yield* orchestrator.getThreadShell(unpinnedThreadId))?.pinnedAt ?? null);
+    }),
+  );
+
   const seedFailingRollbackThread = (name: string) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

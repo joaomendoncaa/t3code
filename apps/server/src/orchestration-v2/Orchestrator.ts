@@ -2510,6 +2510,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
+    const project = yield* projects.get(command.projectId).pipe(mapDispatchError(command));
+    const pinNewThreads =
+      Option.isSome(project) && project.value.deletedAt === null && project.value.pinNewThreads;
     const thread: OrchestrationV2AppThread = {
       createdBy: command.createdBy,
       creationSource: command.creationSource,
@@ -2542,6 +2545,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       settledAt: null,
       snoozedUntil: null,
       snoozedAt: null,
+      pinnedAt: pinNewThreads ? now : null,
       lastVisitedAt: null,
       deletedAt: null,
     };

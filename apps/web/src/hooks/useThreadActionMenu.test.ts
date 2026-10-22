@@ -178,3 +178,12 @@ describe("thread menu permissions", () => {
     },
   );
 });
+
+describe("project pinning", () => {
+  it("pins the thread the project was pinned from", async () => {
+    state.granted.add("secondary");
+    state.show.mockResolvedValue("pin-project");
+    createMenu().openMenu(position);
+    await vi.waitFor(() => expect(state.effects).toEqual(["metadata", "pinThread"]));
+  });
+});
