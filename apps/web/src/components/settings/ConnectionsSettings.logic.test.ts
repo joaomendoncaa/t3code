@@ -3,12 +3,26 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
   isServerNetworkAccessible,
+  isShareablePairingOrigin,
   parseManualDesktopSshTarget,
   resolveAccessEnvironmentId,
   resolveTailscaleServeBaseUrl,
   selectQrEndpointOption,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
+
+describe("isShareablePairingOrigin", () => {
+  it.each(["http:", "https:"])("accepts the web origin %s", (protocol) => {
+    expect(isShareablePairingOrigin(protocol)).toBe(true);
+  });
+
+  it.each(["t3code:", "t3code-dev:", "file:", "ws:"])(
+    "rejects the non-web origin %s",
+    (protocol) => {
+      expect(isShareablePairingOrigin(protocol)).toBe(false);
+    },
+  );
+});
 
 describe("togglePairingScopeSelection", () => {
   it.each([
