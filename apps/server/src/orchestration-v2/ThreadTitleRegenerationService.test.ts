@@ -85,6 +85,7 @@ function makeHarness(
               defaultThreadEnvMode: null,
               hasCustomTitle: false,
               autoPull: false,
+              pinNewThreads: false,
               faviconPath: null,
               projectIcon: null,
               scripts: [],

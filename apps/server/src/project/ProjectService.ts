@@ -203,6 +203,7 @@ export const make = Effect.gen(function* () {
     defaultModelSelection: row.defaultModelSelection,
     defaultThreadEnvMode: row.defaultThreadEnvMode,
     autoPull: row.autoPull,
+    pinNewThreads: row.pinNewThreads,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
     pinnedAt: row.pinnedAt,
@@ -441,6 +442,7 @@ export const make = Effect.gen(function* () {
           ? {}
           : { defaultModelSelection: input.defaultModelSelection }),
         ...(input.autoPull === undefined ? {} : { autoPull: input.autoPull }),
+        ...(input.pinNewThreads === undefined ? {} : { pinNewThreads: input.pinNewThreads }),
         ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
         ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
         ...(input.defaultThreadEnvMode === undefined
