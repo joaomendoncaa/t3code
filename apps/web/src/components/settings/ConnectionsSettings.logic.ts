@@ -57,6 +57,11 @@ export function isQrShareableEndpoint(endpoint: AdvertisedEndpoint): boolean {
   return endpoint.status !== "unavailable" && endpoint.reachability !== "loopback";
 }
 
+/** Desktop runs on the app's custom scheme (t3code://app), which no other device can dial. */
+export function isShareablePairingOrigin(protocol: string): boolean {
+  return protocol === "http:" || protocol === "https:";
+}
+
 /** Desktop skips Tailscale probing until network/Serve is enabled to avoid macOS prompts; absence then
  * means unchecked. */
 export function missingTailscaleEndpointDescription(
@@ -391,7 +396,10 @@ export function resolveAdvertisedEndpointPairingUrl(
   return resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential);
 }
 
-export function resolveCurrentOriginPairingUrl(credential: string): string {
+export function resolveCurrentOriginPairingUrl(credential: string): string | null {
+  if (!isShareablePairingOrigin(window.location.protocol)) {
+    return null;
+  }
   const url = new URL("/pair", window.location.href);
   return setPairingTokenOnUrl(url, credential).toString();
 }
