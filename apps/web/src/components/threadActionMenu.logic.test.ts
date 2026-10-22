@@ -37,7 +37,9 @@ describe("buildThreadActionMenuItems", () => {
   });
 
   it("omits the project pin without a project", () => {
-    expect(ids(baseState)).not.toContain("pin-project");
+    expect(buildThreadActionMenuItems(baseState).map((item) => item.id)).not.toContain(
+      "pin-project",
+    );
   });
 
   it.each([false, true])(
