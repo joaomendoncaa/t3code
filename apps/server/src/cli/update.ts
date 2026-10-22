@@ -113,16 +113,14 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
     const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
     const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
     if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
-    yield* fs
-      .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
-      .pipe(
-        Effect.mapError(
-          () =>
-            new CliUpdateError({
-              reason: `Could not rewrite the clankers launcher at ${shimPath}.`,
-            }),
-        ),
-      );
+    yield* fs.writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`).pipe(
+      Effect.mapError(
+        () =>
+          new CliUpdateError({
+            reason: `Could not rewrite the clankers launcher at ${shimPath}.`,
+          }),
+      ),
+    );
     return Option.some(shimPath);
   }
 

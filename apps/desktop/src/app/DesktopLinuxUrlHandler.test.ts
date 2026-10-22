@@ -223,7 +223,7 @@ describe("DesktopLinuxUrlHandler", () => {
           displayName: "T3 Code (Alpha)",
           execTarget: process.execPath,
           scheme: "t3code",
-          iconPath: "/home/alice/.local/share/icons/com.t3tools.T3Code.desktop.png",
+          iconPath: "/home/alice/.local/share/icons/com.joaomendoncaa.clankers.desktop.png",
         }),
       );
     });
@@ -487,7 +487,7 @@ const iconCacheRuns = (run: ThemeIconRun) =>
   run.commands.filter(({ command }) => command === "gtk-update-icon-cache").length;
 
 it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
-  it.effect("installs both app id spellings without creating an icon cache", () =>
+  it.effect("installs the app id spelling without creating an icon cache", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -497,38 +497,29 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
 
       yield* registerWithRealFileSystem(run);
       assert.deepEqual([...(yield* fileSystem.readDirectory(fixture.appsDir))].sort(), [
-        "com.t3tools.T3Code.png",
-        "com.t3tools.t3code.png",
+        "com.joaomendoncaa.clankers.png",
       ]);
-      for (const name of ["com.t3tools.t3code", "com.t3tools.T3Code"]) {
-        const target = path.join(fixture.appsDir, `${name}.png`);
-        assert.deepEqual([...(yield* fileSystem.readFile(target))], [...icon]);
-        yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
-      }
+      const target = path.join(fixture.appsDir, "com.joaomendoncaa.clankers.png");
+      assert.deepEqual([...(yield* fileSystem.readFile(target))], [...icon]);
+      yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
 
       yield* registerWithRealFileSystem(run);
-      for (const name of ["com.t3tools.t3code", "com.t3tools.T3Code"]) {
-        const info = yield* fileSystem.stat(path.join(fixture.appsDir, `${name}.png`));
-        assert.equal(Option.getOrThrow(info.mtime).getTime(), fixture.pastSeconds * 1000);
-      }
+      const info = yield* fileSystem.stat(target);
+      assert.equal(Option.getOrThrow(info.mtime).getTime(), fixture.pastSeconds * 1000);
       assert.isFalse(yield* fileSystem.exists(fixture.cachePath));
       assert.equal(iconCacheRuns(run), 0);
     }).pipe(Effect.scoped),
   );
 
-  it.effect("replaces same-length stale icons and refreshes an existing cache once", () =>
+  it.effect("replaces a same-length stale icon and refreshes an existing cache once", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const fixture = yield* themeIconFixture(new Uint8Array([1, 2, 3]));
       yield* fixture.seedCache;
-      const lower = path.join(fixture.appsDir, "com.t3tools.t3code.png");
-      const upper = path.join(fixture.appsDir, "com.t3tools.T3Code.png");
-      yield* fileSystem.writeFile(lower, new Uint8Array([3, 2, 1]));
-      yield* fileSystem.writeFile(upper, new Uint8Array([1, 2, 3]));
-      for (const target of [lower, upper]) {
-        yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
-      }
+      const target = path.join(fixture.appsDir, "com.joaomendoncaa.clankers.png");
+      yield* fileSystem.writeFile(target, new Uint8Array([3, 2, 1]));
+      yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
       const run: ThemeIconRun = {
         root: fixture.root,
         commands: [],
@@ -538,9 +529,7 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       yield* registerWithRealFileSystem(run);
       yield* registerWithRealFileSystem(run);
 
-      assert.deepEqual([...(yield* fileSystem.readFile(lower))], [1, 2, 3]);
-      const upperInfo = yield* fileSystem.stat(upper);
-      assert.equal(Option.getOrThrow(upperInfo.mtime).getTime(), fixture.pastSeconds * 1000);
+      assert.deepEqual([...(yield* fileSystem.readFile(target))], [1, 2, 3]);
       assert.deepEqual(
         run.commands.filter(({ command }) => command === "gtk-update-icon-cache"),
         [{ command: "gtk-update-icon-cache", args: ["-f", "-t", fixture.hicolorDir] }],
@@ -564,7 +553,9 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
 
       yield* registerWithRealFileSystem(run);
 
-      assert.isTrue(yield* fileSystem.exists(path.join(fixture.appsDir, "com.t3tools.T3Code.png")));
+      assert.isTrue(
+        yield* fileSystem.exists(path.join(fixture.appsDir, "com.joaomendoncaa.clankers.png")),
+      );
       assert.equal(iconCacheRuns(run), 1);
     }).pipe(Effect.scoped),
   );
