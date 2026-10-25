@@ -237,9 +237,9 @@ export default function DiffPanel({
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
   // Differ canvas tree (see ./differ/DifferTreeView): same diff surface, same
-  // selection — only the presentation changes. On by default; the toggle
-  // flips back to the file list for this panel only.
-  const [differTreeView, setDifferTreeView] = useState(true);
+  // selection — only the presentation changes. Off by default; the toggle
+  // switches to the tree for this panel only.
+  const [differTreeView, setDifferTreeView] = useState(false);
   const [fileTreeOpen, setFileTreeOpen] = useLocalStorage(
     DIFF_FILE_TREE_STORAGE_KEY,
     false,
