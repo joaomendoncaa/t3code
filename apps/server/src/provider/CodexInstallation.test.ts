@@ -163,6 +163,26 @@ it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
       expect((yield* h.installation.state).source).toBe("local");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+it.effect("defers a local Codex probe off the startup path", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({
+      local: { version: "0.156.1" },
+      options: { deferLocalProbe: true },
+    });
+    expect((yield* h.installation.state).source).toBeUndefined();
+    const state = yield* h.installation.changes.pipe(
+      Stream.filter((state) => state.source === "local"),
+      Stream.runHead,
+      Effect.map(Option.getOrThrow),
+    );
+    expect(state.installedVersion).toBe("0.156.1");
+    expect((yield* h.fs.readFileString(h.probeLog)).trim().split("\n")).toEqual([
+      "--version",
+      "app-server --help",
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each([
   { version: "0.128.9" },
   { version: "0.145.0" },

@@ -1,5 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest.
-import { ProviderDriverKind, type ProviderInstallState } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  resolveProviderInstanceEnabled,
+  type ProviderInstallState,
+} from "@t3tools/contracts";
 import { cliArchiveTarCommand } from "@t3tools/shared/cliRelease";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -24,6 +28,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeCrypto from "node:crypto";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
@@ -143,12 +148,26 @@ export class CodexInstallation extends Context.Service<
     CodexInstallation,
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
-      return yield* makeCodexInstallation({ baseDir: config.baseDir });
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const current = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => undefined));
+      const codexInstances =
+        current === undefined
+          ? []
+          : Object.values(current.providerInstances).filter(
+              (instance) => instance.driver === DRIVER,
+            );
+      return yield* makeCodexInstallation({
+        baseDir: config.baseDir,
+        deferLocalProbe:
+          codexInstances.length > 0 && !codexInstances.some(resolveProviderInstanceEnabled),
+      });
     }),
   );
 }
 export interface CodexInstallationOptions {
   readonly baseDir: string;
+  /** Run the local CLI probe in the background when every Codex instance is disabled. */
+  readonly deferLocalProbe?: boolean;
   readonly releaseAsset?: CodexReleaseAsset | null;
   readonly validate?: (
     executable: CodexExecutable,
@@ -739,7 +758,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     ),
   );
 
-  yield* Effect.gen(function* () {
+  const initialize = Effect.gen(function* () {
     // Shared-home installs do not refresh parent mtimes; remove only staging directories far older than the 45-minute download cap.
     let canRemove = false;
     if (yield* fs.exists(managedDirectory)) {
@@ -791,6 +810,12 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       ),
     ),
   );
+
+  if (options.deferLocalProbe) {
+    yield* initialize.pipe(Effect.forkIn(serviceScope));
+  } else {
+    yield* initialize;
+  }
 
   return CodexInstallation.of({
     managedDirectory,

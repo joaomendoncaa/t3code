@@ -21,8 +21,7 @@ import {
 } from "lucide-react";
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide";
 import * as Schema from "effect/Schema";
-import * as DateTime from "effect/DateTime";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
@@ -622,16 +621,12 @@ export default function DiffPanel({
   // Differ canvas tree input: same files the list view renders, mapped onto
   // the differ row builder's file contract (no symbols yet — file-level tree
   // until the symbol-enrichment service lands).
-  const differFileEntries = useMemo(
-    () =>
-      renderableFileEntries.map(({ fileDiff, fileKey }) => ({
-        key: fileKey,
-        path: resolveFileDiffPath(fileDiff),
-        prevPath: resolveFileDiffPreviousPath(fileDiff),
-        status: differFileStatusForType(fileDiff.type),
-      })),
-    [renderableFileEntries],
-  );
+  const differFileEntries = renderableFileEntries.map(({ fileDiff, fileKey }) => ({
+    key: fileKey,
+    path: resolveFileDiffPath(fileDiff),
+    prevPath: resolveFileDiffPreviousPath(fileDiff),
+    status: differFileStatusForType(fileDiff.type),
+  }));
   const revealDiffFile = (filePath: string) => {
     const index = renderableFileEntries.findIndex(
       (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
