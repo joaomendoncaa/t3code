@@ -71,11 +71,11 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
-import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 
 import {
   isProviderNativeImageAttachment,
