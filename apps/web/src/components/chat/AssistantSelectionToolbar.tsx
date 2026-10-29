@@ -14,7 +14,6 @@ import {
 import {
   isSelectionRectVisible,
   observeSelectionActions,
-  resolveSelectionActionPosition,
   type SelectionActionPoint,
 } from "~/lib/selectionActions";
 import { Button } from "../ui/button";
@@ -36,20 +35,20 @@ export function AssistantSelectionToolbar({
   const toolbarRef = useRef<HTMLButtonElement>(null);
   const actionsRef = useRef<ReturnType<typeof observeSelectionActions> | null>(null);
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the toolbar DOM node and clamps its position inside the window before paint
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the toolbar DOM node to center it over the selection's top edge before paint
   useLayoutEffect(() => {
     const toolbar = toolbarRef.current;
     if (!toolbar || !selection) return;
     const rect = toolbar.getBoundingClientRect();
-    toolbar.style.left = `${Math.max(8, Math.min(selection.position.x, window.innerWidth - rect.width - 8))}px`;
-    toolbar.style.top = `${Math.max(8, Math.min(selection.position.y, window.innerHeight - rect.height - 8))}px`;
+    toolbar.style.left = `${Math.max(8, Math.min(selection.position.x - rect.width / 2, window.innerWidth - rect.width - 8))}px`;
+    toolbar.style.top = `${Math.max(8, Math.min(selection.position.y - rect.height - 6, window.innerHeight - rect.height - 8))}px`;
   }, [selection]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to document selectionchange and keydown to track text selections in the viewport
   useEffect(() => {
     if (!viewport) return;
     const clear = () => setSelection(null);
-    const update = (pointer: SelectionActionPoint | null) => {
+    const update = () => {
       const nativeSelection = window.getSelection();
       const captured = captureAssistantTextSelection(viewport, nativeSelection);
       const messageId = captured?.source.dataset.assistantCitationSource;
@@ -109,16 +108,6 @@ export function AssistantSelectionToolbar({
         clear();
         return;
       }
-      const rects = captured.range.getClientRects();
-      const pointerOnText =
-        pointer !== null &&
-        Array.from(rects).some(
-          (line) =>
-            pointer.x >= line.left - 8 &&
-            pointer.x <= line.right + 8 &&
-            pointer.y >= line.top - 8 &&
-            pointer.y <= line.bottom + 8,
-        );
       setSelection({
         sourceAnchor: { source: captured.source, range: captured.range, viewport },
         citation: {
@@ -127,12 +116,7 @@ export function AssistantSelectionToolbar({
           messageId: MessageId.make(messageId),
           ...captured.selector,
         },
-        position: resolveSelectionActionPosition({
-          bounds: viewportRect,
-          selectionRect: rects.item(rects.length - 1) ?? rect,
-          pointer: pointerOnText ? pointer : null,
-          viewport: { width: window.innerWidth, height: window.innerHeight },
-        }),
+        position: { x: rect.left + rect.width / 2, y: rect.top },
       });
     };
     const actions = observeSelectionActions({
