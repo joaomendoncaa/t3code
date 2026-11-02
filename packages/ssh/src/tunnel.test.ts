@@ -332,7 +332,7 @@ describe("ssh tunnel scripts", () => {
           assert.include(result.stderr, "https://github.com/pingdotgg/t3code/releases/download");
         } else {
           assert.notInclude(result.stderr, "download attempt");
-          assert.include(result.stderr, "has no t3 release archive.");
+          assert.include(result.stderr, "has no clankers release archive.");
         }
       } finally {
         NodeFS.rmSync(root, { recursive: true, force: true });
@@ -345,14 +345,14 @@ describe("ssh tunnel scripts", () => {
     try {
       const bin = NodePath.join(root, "bin");
       const release = NodePath.join(root, "release");
-      const archive = `t3-${ARCHIVE.archiveVersion}-linux-x64.tar.gz`;
+      const archive = `clankers-${ARCHIVE.archiveVersion}-linux-x64.tar.gz`;
       NodeFS.mkdirSync(bin);
       NodeFS.mkdirSync(NodePath.join(root, "home"));
-      NodeFS.mkdirSync(NodePath.join(release, "t3"), { recursive: true });
-      NodeFS.writeFileSync(NodePath.join(release, "t3", "t3"), "#!/bin/sh\necho ok\n", {
+      NodeFS.mkdirSync(NodePath.join(release, "clankers"), { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(release, "clankers", "clankers"), "#!/bin/sh\necho ok\n", {
         mode: 0o755,
       });
-      NodeChildProcess.execFileSync("tar", ["-czf", archive, "t3"], { cwd: release });
+      NodeChildProcess.execFileSync("tar", ["-czf", archive, "clankers"], { cwd: release });
       NodeChildProcess.execFileSync("sh", ["-c", `sha256sum ${archive} > SHA256SUMS`], {
         cwd: release,
       });

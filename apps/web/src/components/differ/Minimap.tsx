@@ -1,11 +1,7 @@
-// Stable overview rail: one bar per filtered-tree node. Panel height maps
-// 1:1 to camera space (collapsed runs keep their scroll space), so a node
-// sits at the same Y no matter the zoom, pan, or fold state.
-// Click/drag centers the camera exactly, even on collapsed gaps.
-// Overview rail, vendored from the differ project
-// (differ/src/components/Minimap.tsx). See DiffCanvas.tsx for the vendoring
-// contract: verbatim logic, T3 adaptation in DifferTreeView.tsx.
+// Overview rail, vendored from the differ project. Height maps 1:1 to camera
+// space, so a node keeps its Y across zoom, pan and fold; click centers it.
 import { useEffect, useRef } from "react";
+import { observeResize } from "~/lib/observeResize";
 import { STATUS_META, rowKey, type Row } from "./rows";
 import { LIGHT_FG, type Cam } from "./DiffCanvas";
 
@@ -108,6 +104,7 @@ export default function Minimap({
   const mode = useRef<null | "pan" | "top" | "bottom">(null);
   const anchor = useRef(0);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- redraws the canvas rail from props and its DOM size
   useEffect(() => {
     const cv = ref.current;
     const wrap = wrapRef.current;
@@ -199,9 +196,7 @@ export default function Minimap({
       }
     };
     draw();
-    const ro = new ResizeObserver(draw);
-    ro.observe(wrap);
-    return () => ro.disconnect();
+    return observeResize(wrap, draw);
   }, [full, cam, rowH, viewH, dark, onRange, hl]);
 
   function idxFromEvent(e: React.PointerEvent): number {

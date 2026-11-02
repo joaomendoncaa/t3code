@@ -78,6 +78,7 @@ vi.mock("~/hooks/useTheme", () => ({
   useRenderedAppearance: () => "dark",
   getRenderedAppearance: () => "dark",
   subscribeRenderedAppearance: () => () => {},
+  useTheme: () => ({ theme: "dark", resolvedTheme: "dark" }),
 }));
 vi.mock("~/state/queries", () => ({
   useCheckpointDiff: () => ({ data: state.checkpointDiff, error: null, isPending: false }),

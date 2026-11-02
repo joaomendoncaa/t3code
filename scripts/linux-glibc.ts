@@ -35,7 +35,11 @@ export function parseGlibcNeeds(output: string): string | undefined {
   return minimum;
 }
 
-export async function scanGlibcNeeds(appOutDir: string): Promise<{
+export async function scanGlibcNeeds(
+  appOutDir: string,
+  // A `dir` build is a local unpacked tree, not a release, so it may exceed the release ceiling.
+  options: { readonly enforceBuildCeiling?: boolean } = {},
+): Promise<{
   minimum: string;
   elfCount: number;
 }> {
@@ -68,7 +72,11 @@ export async function scanGlibcNeeds(appOutDir: string): Promise<{
         });
         if (stderr.trim()) throw new Error(stderr.trim());
         const required = parseGlibcNeeds(stdout);
-        if (required && compareVersions(required, GLIBC_BUILD_CEILING) > 0) {
+        if (
+          options.enforceBuildCeiling !== false &&
+          required &&
+          compareVersions(required, GLIBC_BUILD_CEILING) > 0
+        ) {
           throw new Error(
             `requires GLIBC_${required}, exceeding build ceiling ${GLIBC_BUILD_CEILING}`,
           );
@@ -85,7 +93,9 @@ export async function scanGlibcNeeds(appOutDir: string): Promise<{
   await walk(appOutDir);
   if (elfCount === 0 || !minimum) throw new Error(`No glibc requirements found in ${appOutDir}`);
   console.log(
-    `[linux-glibc] ${elfCount} ELF files; requires glibc >= ${minimum}; build ceiling ${GLIBC_BUILD_CEILING}`,
+    options.enforceBuildCeiling === false
+      ? `[linux-glibc] ${elfCount} ELF files; requires glibc >= ${minimum}`
+      : `[linux-glibc] ${elfCount} ELF files; requires glibc >= ${minimum}; build ceiling ${GLIBC_BUILD_CEILING}`,
   );
   return { minimum, elfCount };
 }

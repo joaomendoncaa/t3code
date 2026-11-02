@@ -167,6 +167,24 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("repairs a fork build that recorded the pin migration at an upstream id", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 80 });
+      // An older fork shipped pin-project as id 81, the id upstream later gave message search.
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name)
+        VALUES (81, 'ProjectionProjectsPinNewThreads')
+      `;
+
+      assert.deepStrictEqual(
+        yield* runMigrations(),
+        v2Migrations.filter(([id]) => id > 80),
+      );
+      assert.deepStrictEqual(yield* history, migrationManifest);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("reapplies peer link migrations whose ledger rows are missing", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

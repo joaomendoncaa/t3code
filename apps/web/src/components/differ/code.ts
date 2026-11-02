@@ -1,20 +1,11 @@
-// Symbol code hunks, vendored from the differ project (differ/lib/code.ts)
-// onto the differ-tree-view branch. Verbatim logic; exercised once the
-// symbol-enrichment service lands (see DifferTreeView.tsx).
-// Slice a symbol's exact line range out of a fetched file and align old vs
-// new into side-by-side rows. Only the hunk related to the symbol is ever
-// shown — never the whole file.
+// Symbol hunk slicing, vendored from the differ project. Aligns a symbol's
+// old and new line ranges into rows and shows only its hunk, never the file.
 import { parseDiffFromFile } from "@pierre/diffs";
 import type { Status } from "./rows";
 
-// jsdiff (behind pierre's parseDiffFromFile) trims hunks to ±`context`
-// lines, stashing the edges in collapsedBefore/After regions that the
-// overlay renderer must then re-expand. Our overlay shifts hunk starts to
-// absolute file lines, which corrupts exactly that trailing-region math
-// (absolute start vs snippet length → negative remainder → trailing line
-// never renders: every window ran one row short). Parsing with full context
-// keeps every line inside a hunk, so the region logic stays idle and the
-// shift is safe. MUST be used for every parse whose rows feed the overlay.
+// Parse with full context: our overlay shifts hunk starts to absolute file
+// lines, which corrupts jsdiff's trailing collapsed regions. MUST be used for
+// every parse whose rows feed the overlay.
 export const DIFF_CONTEXT = 1_000_000_000;
 const PARSE_OPTS = { context: DIFF_CONTEXT };
 
@@ -81,12 +72,8 @@ export function hunkGaps(lines: CodeLine[], context: number = HUNK_CONTEXT): Hun
   return gaps;
 }
 
-/** Visible line blocks + collapsed gaps for a hunk. Gap indices are stable
- *  (position among all gaps), so expanding one never renumbers the rest.
- *  Expanded gaps MERGE into their neighboring windows: a standalone
- *  pure-context window would diff to zero hunks, which the overlay renders
- *  as nothing (blank rows), so every emitted show block contains a change
- *  except in the degenerate all-unchanged hunk. */
+/** Visible line blocks + collapsed gaps. Gap indices stay stable; expanded
+ *  gaps merge into windows so no show block is pure context. */
 export function hunkBlocks(
   lines: CodeLine[],
   context: number = HUNK_CONTEXT,
@@ -115,11 +102,8 @@ function buildBlocks(gaps: HunkGap[], total: number, kept: Set<number>): HunkBlo
   return out;
 }
 
-/** True when re-diffing a visible window reproduces its slot rows exactly
- *  (same count, same statuses). The overlay diffs each window on its own,
- *  and on repetitive content (Cargo.lock) that diff can align lines
- *  differently than the full-file diff the slots came from — then every
- *  overlay row below drifts off its slot. */
+/** Re-diffing a window must reproduce its slot rows exactly, or repetitive
+ *  content aligns differently and every overlay row below drifts. */
 function verifyWindow(lines: CodeLine[], start: number, end: number): boolean {
   const w = windowSnippets(lines, start, end);
   const re = alignCode(w.old, w.new, w.oldStart ?? 1, w.newStart ?? 1);
@@ -128,12 +112,9 @@ function verifyWindow(lines: CodeLine[], start: number, end: number): boolean {
   return true;
 }
 
-/** Gap-collapsed blocks, verified window by window: any window whose
- *  re-diff would misalign its overlay drops its neighboring gaps (shows
- *  more) until every window is exact. Fail safe is the whole hunk shown —
- *  always aligned, just uncollapsed. Every consumer (tree slots, overlay,
- *  counts) must use this, never hunkBlocks directly, or the layers disagree
- *  on row geometry. */
+/** Gap-collapsed blocks verified window by window; any misaligned window
+ *  drops its neighboring gaps. Every consumer must use this, never
+ *  hunkBlocks directly, or the layers disagree on row geometry. */
 export function safeHunkBlocks(
   lines: CodeLine[],
   context: number = HUNK_CONTEXT,
@@ -174,11 +155,8 @@ export function hunkVisibleCount(
   return n;
 }
 
-/** Rebuild the old/new snippets for one visible window, for the overlay to
- *  diff on its own. Null side = window has no lines on that side. The join
- *  always ends with a newline: pierre parses trailing-newline-terminated
- *  text, so a window ending on a blank line would otherwise lose its last
- *  row and every overlay row below would drift one slot up. */
+/** Old/new snippets for one visible window. The join always ends in a
+ *  newline, or a window ending on a blank line loses its last row. */
 export function windowSnippets(
   lines: CodeLine[],
   start: number,

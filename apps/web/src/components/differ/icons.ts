@@ -1,14 +1,5 @@
-// Icon helpers for the differ canvas tree.
-//
-// The differ project resolves symbol icons from @vscode/codicons and
-// file/folder icons from its own /api/icon server. Neither exists in T3 web,
-// so this module keeps the same interface with what T3 can offer today:
-// no per-kind symbol art (KINDS stays empty; DiffCanvas already renders a
-// null icon as text-only) and the shared image cache for any future data-URL
-// icons the symbol-enrichment service provides.
-//
-// Deliberately _not_ a verbatim copy: importing differ's icons.tsx would pull
-// @vscode/codicons (?raw SVG) into the web bundle.
+// Differ icon helpers. T3 web has no codicons or icon server, so KINDS stays
+// empty (DiffCanvas renders text-only) and images load through this cache.
 const cache = new Map<string, HTMLImageElement>();
 const subs = new Set<() => void>();
 

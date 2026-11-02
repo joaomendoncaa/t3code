@@ -88,11 +88,14 @@ const layer = Layer.mergeAll(
   Layer.succeed(OpenCodeRuntime.OpenCodeRuntime, openCode2Runtime),
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
+// Keeps a developer's own OpenCode Go login out of the usage-limit read, which would reach for HTTP.
+const NO_CREDENTIALS_HOME = NodePath.join(NodeOS.tmpdir(), "t3-opencode-driver-no-credentials");
+
 const create = (config: Partial<OpenCodeSettings>, http: HttpClient.HttpClient, enabled = true) =>
   OpenCodeDriver.create({
     instanceId: ProviderInstanceId.make("opencode-test"),
     displayName: undefined,
-    environment: [],
+    environment: [{ name: "XDG_DATA_HOME", sensitive: false, value: NO_CREDENTIALS_HOME }],
     enabled,
     config: { ...OpenCodeDriver.defaultConfig(), ...config },
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));

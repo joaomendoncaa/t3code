@@ -1780,7 +1780,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           >;
           const input = toolInput(part);
           const rawOutput = toolOutput(part);
-          let output: unknown = rawOutput;
+          let htmlRenderOutput: { htmlRender: HtmlRenderReference } | undefined;
           const isNativeTool = part.tool === "code_search" || part.tool === "apply_patch";
           if (!isNativeTool && part.tool.includes("_") && turn.mcpServerNames === undefined) {
             const serverNames = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.status", (signal) =>
@@ -1814,7 +1814,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             part.state.status === "completed" &&
             resolveT3McpToolId(part.tool) === HTML_RENDER_TOOL_NAME
           ) {
-            const reported = htmlRenderFromToolItem({ toolName: part.tool, output });
+            const reported = htmlRenderFromToolItem({ toolName: part.tool, output: rawOutput });
             if (reported !== undefined) {
               yield* mcpSessions.takeHtmlRender(turn.threadId, input, reported).pipe(Effect.ignore);
             } else {
@@ -1824,7 +1824,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 (yield* mcpSessions.takeHtmlRender(turn.threadId, input));
               if (page !== undefined) {
                 htmlRendersByPartId.set(key, page);
-                output = { htmlRender: page };
+                htmlRenderOutput = { htmlRender: page };
               }
             }
           }
@@ -1835,9 +1835,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...presentation,
                 toolName: part.tool,
                 input,
-                ...(output === undefined && !files?.length
-                  ? {}
-                  : { output: openCodeToolOutput(output, files) }),
+                ...(htmlRenderOutput !== undefined
+                  ? { output: htmlRenderOutput }
+                  : rawOutput === undefined && !files?.length
+                    ? {}
+                    : { output: openCodeToolOutput(rawOutput, files) }),
               }
             : openCodeToolTurnItem(base, {
                 name: part.tool,

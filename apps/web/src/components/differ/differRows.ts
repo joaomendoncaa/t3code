@@ -36,11 +36,8 @@ export function differRowsForEntries(
         return { path: entry.path, status: "Modified" };
     }
   });
-  // Differ renders the entire tree: allOld/allNew are the full file lists
-  // at each rev, and unchanged paths become "same" rows (collapsed by
-  // defaultCollapsed). Until callers plumb a full listing, this unions the
-  // entry-derived paths with the optional full lists, so diff-only input
-  // keeps today's behavior unchanged.
+  // allOld/allNew hold the full file list at each rev when callers plumb it;
+  // otherwise union them with entry paths so diff-only input stays unchanged.
   const allOld = [...new Set([...(full?.allOld ?? []), ...oldFromEntries])];
   const allNew = [...new Set([...(full?.allNew ?? []), ...newFromEntries])];
   return buildRows(allOld, allNew, { files, symbols: [] }, renames);

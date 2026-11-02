@@ -1,8 +1,5 @@
-// Pure row builder + filters, vendored from the differ project
-// (differ/lib/rows.ts) onto the differ-tree-view branch. Verbatim logic;
-// T3 adaptation lives in DifferTreeView.tsx.
-// Ports tree_diff.py build_rows, corrected: symbols pair by name
-// (path::name), not by kind sequence.
+// Pure row builder + filters, vendored from the differ project. Ports
+// tree_diff.py build_rows; symbols pair by name (path::name), not kind sequence.
 
 export type Status = "same" | "add" | "del" | "mod" | "moved";
 
@@ -237,14 +234,9 @@ export function buildRows(
     return rows;
   };
 
-  // Unified pair list sorted once GitHub-style (by new path, deleted by old
-  // path interleaved in-tree). Previously two loops: new-tree sorted, then
-  // deletions appended last, which broke tree order.
-  // Within one directory MOVED entries come first, so one structural move
-  // (a deleted dir hoisting everything up a level) reads as a single
-  // contiguous block. Modified-in-place, added and deleted files keep plain
-  // GitHub order: they are not part of the move and must not fracture it.
-  // Across directories this is still plain GitHub order (a DFS tree order).
+  // Sorted GitHub-style once (new path; deletions interleave by old path).
+  // MOVED entries come first within a directory so one structural move stays
+  // contiguous; other statuses keep plain GitHub order.
   const parentDir = (p: string) => {
     const i = p.lastIndexOf("/");
     return i < 0 ? "" : p.slice(0, i);
@@ -495,13 +487,9 @@ export function rowKey(r: Row): string {
   return `${r.status}|${c(r.left)}|${c(r.right)}`;
 }
 
-// --- Manual tree folding: any folder or file with children can collapse ---
-// Expandable symbols count too, before their code loads (no kids yet).
-// Children are the contiguous run after a parent: deeper rows (folders), or
-// deeper same-path rows (a file's symbols). Collapsed children leave the
-// visible list, so camera, canvas, and minimap stay 1:1 with no translation.
-// A symbol the UI can unfold inline (mirrors isSymbolRow in App.tsx):
-// has a kind, isn't a file/folder/code slot, and carries a change.
+// Any folder, file or symbol with children can collapse; children are the
+// contiguous run of deeper rows after a parent. Collapsed children leave the
+// visible list, so camera, canvas and minimap stay 1:1.
 function isExpandableSymbol(r: Row): boolean {
   if (r.status === "same") return false;
   const c = r.right ?? r.left;
@@ -602,15 +590,9 @@ export function defaultCollapsed(rows: Row[]): Set<string> {
   return out;
 }
 
-// --- Inline symbol code: unfolded hunks live in the tree as child rows ---
-// A symbol row with an entry here reserves slots for its hunk's visible
-// lines (depth +1 nests them under the symbol via treeLinks, so folding,
-// sticky parents, the minimap, and zoom treat them as ordinary tree rows).
-// Long unchanged runs collapse to one gap row per hidden range (see
-// hunkBlocks in lib/code.ts): click it to expand. The slots carry only
-// status tint — pierre-rendered hunk windows paint the actual code over the
-// visible ranges. Keyed by the symbol's rowKey; built client-side by
-// alignCode (lib/code.ts).
+// Inline symbol code: a symbol row with an entry here reserves slots for its
+// hunk's visible lines. Long unchanged runs collapse to one gap row per hidden
+// range; slots carry only status tint while pierre paints the code.
 import { safeHunkBlocks, HUNK_CONTEXT, type ExpandedHunk } from "./code";
 
 export function injectCodeRows(rows: Row[], code: Map<string, ExpandedHunk>): Row[] {

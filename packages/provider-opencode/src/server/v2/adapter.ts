@@ -70,12 +70,13 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
-import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
+import { HTML_RENDER_TOOL_NAME, type HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { compareSemverVersions } from "@t3tools/shared/semver";
+import { resolveT3McpToolId } from "@t3tools/shared/t3McpToolPresentation";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
-import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+import { htmlRenderFromToolItem, htmlRendersFromToolOutput } from "@t3tools/shared/toolOutput";
 
 import {
   isProviderNativeImageAttachment,
@@ -871,6 +872,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const pending = new Map<RuntimeRequestId, PendingRequest>();
     const lock = yield* Semaphore.make(1);
     const clearing = new Map<string, Deferred.Deferred<void>>();
+    // OpenCode 2 returns MCP results as text; keep the published page for repeated completion events.
+    const htmlRendersByToolCallId = new Map<string, HtmlRenderReference>();
     const stagedReverts = new Set<string>();
     const sessionGates = yield* KeyedLock.make<string>();
     const exclusive =
@@ -1376,7 +1379,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           ? "failed"
           : status;
       yield* emitNode(state, turn, nativeId, "tool_call", settled, startedAt, completedAt);
-      const turnItem = openCodeToolTurnItem(
+      let turnItem = openCodeToolTurnItem(
         {
           ...itemBase(state, turn, nativeId, settled, startedAt, completedAt, updatedAt),
           ...(result?.nativeTaskId === undefined
@@ -1394,21 +1397,54 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               : undefined,
         },
       );
+      if (status === "completed" && resolveT3McpToolId(tool.name) === HTML_RENDER_TOOL_NAME) {
+        const reported = htmlRenderFromToolItem({ toolName: tool.name, output: result?.output });
+        if (reported !== undefined) {
+          yield* mcpSessions
+            .takeHtmlRender(turn.input.threadId, tool.input, reported)
+            .pipe(Effect.ignore);
+        } else {
+          const key = `${turn.input.threadId}:${nativeId}`;
+          const page =
+            htmlRendersByToolCallId.get(key) ??
+            (yield* mcpSessions.takeHtmlRender(turn.input.threadId, tool.input));
+          if (page !== undefined && turnItem.type === "dynamic_tool") {
+            htmlRendersByToolCallId.set(key, page);
+            turnItem = { ...turnItem, output: { htmlRender: page } };
+          }
+        }
+      }
       yield* emit({ type: "turn_item.updated", driver, turnItem });
       if (status === "running") return;
       // A script that returns the reference already renders through its own item.
+      const renderedAttachments = new Set<string>();
       const returnedPage =
         turnItem.type === "dynamic_tool" ? htmlRenderFromToolItem(turnItem) : undefined;
-      const pages = openCodeCodeModeHtmlRenders(
-        result?.metadata,
-        yield* mcpServerNameFor(turn.input.threadId),
-      );
-      for (const { index, input } of pages) {
-        const pageId = `${nativeId}:${HTML_RENDER_TOOL_NAME}:${index}`;
+      if (returnedPage !== undefined) renderedAttachments.add(returnedPage.attachmentId);
+      // Code Mode reports nested calls by their input; a script's text result carries its own page.
+      const sources = [
+        ...openCodeCodeModeHtmlRenders(
+          result?.metadata,
+          yield* mcpServerNameFor(turn.input.threadId),
+        ).map(({ index, input }) => ({
+          pageId: `${nativeId}:${HTML_RENDER_TOOL_NAME}:${index}`,
+          take: mcpSessions.takeHtmlRender(turn.input.threadId, input),
+        })),
+        ...(tool.name.toLowerCase() === "execute"
+          ? htmlRendersFromToolOutput(result?.output)
+          : []
+        ).map((page, index) => ({
+          pageId: `${nativeId}:${HTML_RENDER_TOOL_NAME}:output:${index}`,
+          take: Effect.succeed(page) as Effect.Effect<HtmlRenderReference | undefined>,
+        })),
+      ];
+      for (const { pageId, take } of sources) {
+        // Taken first, so a replayed event does not spend a later script's page.
         if (turn.takenPages.has(pageId)) continue;
         turn.takenPages.add(pageId);
-        const page = yield* mcpSessions.takeHtmlRender(turn.input.threadId, input);
-        if (page === undefined || page.attachmentId === returnedPage?.attachmentId) continue;
+        const page = yield* take;
+        if (page === undefined || renderedAttachments.has(page.attachmentId)) continue;
+        renderedAttachments.add(page.attachmentId);
         yield* emitNode(state, turn, pageId, "tool_call", "completed", startedAt, updatedAt);
         yield* emit({
           type: "turn_item.updated",

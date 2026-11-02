@@ -234,6 +234,30 @@ export function skippedV2Migrations(
   });
 }
 
+/**
+ * This fork shipped `ProjectionProjectsPinNewThreads` at ids upstream later claimed, so a database
+ * written by an older build records that name at a foreign id. Drop the stale row and let the
+ * migrator replay the id's real migration; the pin migration's column guard makes its replay a
+ * no-op. Without this, the recorded id skips upstream's migrations and startup refuses to run.
+ */
+const MOVED_MIGRATION_NAMES = ["ProjectionProjectsPinNewThreads"] as const;
+
+const reconcileMovedMigrations = Effect.fn("reconcileMovedMigrations")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return;
+  for (const name of MOVED_MIGRATION_NAMES) {
+    const currentId = migrationEntries.find(([, entryName]) => entryName === name)?.[0];
+    if (currentId === undefined) continue;
+    yield* sql`
+      DELETE FROM effect_sql_migrations
+      WHERE name = ${name} AND migration_id <> ${currentId}
+    `;
+  }
+});
+
 // Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
@@ -291,6 +315,9 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   if (yield* hasPendingMigrations()) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
   const includesV2 =
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
+  if (includesV2) {
+    yield* reconcileMovedMigrations();
+  }
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
   if (includesV2) {
     yield* assertV2MigrationsCanRun(toMigrationInclusive);

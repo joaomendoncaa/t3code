@@ -105,7 +105,7 @@ async function install(dir, key) {
     if (extract.status !== 0) throw new Error(`could not extract ${archive}`);
     fs.rmSync(file);
     const validate = spawnSync(
-      path.join(staging, process.platform === "win32" ? "t3.exe" : "t3"),
+      path.join(staging, process.platform === "win32" ? "clankers.exe" : "clankers"),
       ["--version"],
       {
         stdio: ["ignore", "ignore", "pipe"],

@@ -1,12 +1,8 @@
-// Canvas diff renderer: one viewport-sized framebuffer, constant memory no
-// matter how many rows. Only the visible window is drawn; everything else is
-// math, never DOM.
-// Canvas diff tree renderer, vendored from the differ project
-// (differ/src/components/DiffCanvas.tsx) onto the differ-tree-view branch.
-// Only the import paths below were adjusted; rendering logic is verbatim so
-// future differ improvements merge cleanly. T3 adaptation (theme, repo
-// context, auth) lives in DifferTreeView.tsx, not here.
+// Canvas diff renderer, vendored from the differ project. One viewport-sized
+// framebuffer, constant memory: only the visible window is drawn.
+// T3 adaptation (theme, repo context, auth) lives in DifferTreeView.tsx.
 import { useEffect, useReducer, useRef } from "react";
+import { observeResize } from "~/lib/observeResize";
 import { STATUS_META, rowKey, type Cell, type Row, type Status } from "./rows";
 import { KINDS, iconImg, onIconLoad, themeIcon } from "./icons";
 
@@ -104,11 +100,8 @@ function cellLabel(cell: Cell): string {
   return cell.label.replace(/\/$/, "");
 }
 
-// [twisty] [mark] [indent guides] [icon] label. Symbols drop the "fn "
-// prefix: the icon carries the kind. Code slots (isCode) only take the
-// status tint: the hunk overlay paints the code over the slot range —
-// unless bare, when they stay transparent (pierre hasn't painted yet;
-// tint would flash as empty rows).
+// [twisty] [mark] [indent guides] [icon] label. Symbol rows drop the "fn "
+// prefix; code slots carry only the status tint until pierre paints them.
 function drawCell(
   ctx: CanvasRenderingContext2D,
   cell: Cell | null,
@@ -230,15 +223,18 @@ export default function DiffCanvas({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [iconTick, bump] = useReducer((n: number) => n + 1, 0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the shared icon cache so loaded icons repaint
   useEffect(() => onIconLoad(bump), []);
   // Advance the braille spinner only while some row is loading it.
   const [spinTick, bumpSpin] = useReducer((n: number) => n + 1, 0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- runs the spinner interval while a row is loading
   useEffect(() => {
     if ((loading?.size ?? 0) === 0) return;
     const t = window.setInterval(bumpSpin, 80);
     return () => window.clearInterval(t);
   }, [loading]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- repaints the canvas from props and DOM size
   useEffect(() => {
     const cv = ref.current;
     const parent = cv?.parentElement;
@@ -260,12 +256,8 @@ export default function DiffCanvas({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       ctx.setTransform(dpr * cam.k, 0, 0, dpr * cam.k, dpr * cam.x, dpr * cam.y);
-      // Full-bleed backgrounds: world span of the visible stage. When the
-      // tree (width) is narrower it stays centered via cam.x and the bg
-      // extends into the gutters; when zoomed/panned past overflow this
-      // collapses back to the visible slice of the content. No base fill:
-      // the card (same as the header) shows through, so header and canvas
-      // are one surface and `same` rows need no paint.
+      // World span of the visible stage, so backgrounds bleed into the gutters
+      // and the card shows through on `same` rows.
       const worldL = -cam.x / cam.k;
       const worldR = (w - cam.x) / cam.k;
       const y0 = (0 - cam.y) / cam.k;
@@ -407,9 +399,7 @@ export default function DiffCanvas({
       // No outer frame: row hairlines already bound the body.
     };
     draw();
-    const ro = new ResizeObserver(draw);
-    ro.observe(parent);
-    return () => ro.disconnect();
+    return observeResize(parent, draw);
   }, [
     rows,
     cam,
@@ -419,6 +409,7 @@ export default function DiffCanvas({
     collapsible,
     hover,
     sticky,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- iconTick invalidates the canvas when an icon finishes loading
     iconTick,
     dark,
     hl,

@@ -5160,7 +5160,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           : [],
       );
       const render = items.find(
-        (item) => item.type === "dynamic_tool" && item.toolName === "html_render",
+        (item) => item.type === "dynamic_tool" && item.toolName === "t3-code.html_render",
       );
       assert.deepEqual(render?.type === "dynamic_tool" ? render.output : null, {
         htmlRender: page,
